@@ -232,6 +232,12 @@ fi
 # STEP 8: NGINX REVERSE PROXY
 # ═══════════════════════════════════════════════════════════════
 info "Configuring nginx..."
+
+# Rate limiting zone must be in http context (not inside server block)
+cat > /etc/nginx/conf.d/rate-limit.conf << 'EOF'
+limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
+EOF
+
 cat > /etc/nginx/sites-available/hoops << EOF
 server {
     listen 80;
@@ -243,9 +249,6 @@ server {
 
     # Max upload size (for CSV import)
     client_max_body_size 2M;
-
-    # Rate limiting zone
-    limit_req_zone \$binary_remote_addr zone=api:10m rate=30r/s;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
