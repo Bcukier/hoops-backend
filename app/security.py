@@ -203,8 +203,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=(), payment=()"
         )
-        # Content Security Policy (API only — tighten for frontend)
-        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+        # Content Security Policy
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'"
+        )
         # Strict Transport Security (enable behind TLS terminator)
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
