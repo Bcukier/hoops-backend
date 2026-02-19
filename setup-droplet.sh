@@ -277,7 +277,7 @@ server {
     }
 
     # Cache static assets
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)\$ {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
         expires 7d;
@@ -289,7 +289,7 @@ EOF
 rm -f /etc/nginx/sites-enabled/default
 ln -sf /etc/nginx/sites-available/hoops /etc/nginx/sites-enabled/
 
-nginx -t >/dev/null 2>&1 || error "Nginx config test failed"
+nginx -t 2>&1 || error "Nginx config test failed: $(nginx -t 2>&1)"
 systemctl restart nginx
 success "Nginx configured"
 
