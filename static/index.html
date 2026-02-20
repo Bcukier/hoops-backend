@@ -292,18 +292,14 @@ function renderLogin() {
       <p style="color:var(--text2);font-size:14px;margin-bottom:28px;">Pickup Basketball Manager</p>
       <div style="text-align:left;">
         <label>Email</label>
-        <input type="email" id="login-email" placeholder="you@example.com" style="margin-bottom:12px;" value="ben@example.com">
+        <input type="email" id="login-email" placeholder="you@example.com" style="margin-bottom:12px;">
         <label>Password</label>
-        <input type="password" id="login-pass" placeholder="••••••••" style="margin-bottom:20px;" value="pass123"
+        <input type="password" id="login-pass" placeholder="••••••••" style="margin-bottom:20px;"
           onkeydown="if(event.key==='Enter')doLogin()">
         <button class="btn-primary" id="login-btn" style="width:100%;padding:12px;" onclick="doLogin()">Sign In</button>
       </div>
-      <div style="margin-top:20px;display:flex;justify-content:space-between;font-size:13px;">
+      <div style="margin-top:20px;display:flex;justify-content:center;font-size:13px;">
         <a style="color:var(--orange);cursor:pointer;" onclick="navigate('signup')">New player? Sign up</a>
-        <a style="color:var(--text2);cursor:pointer;" onclick="doResetPassword()">Reset password</a>
-      </div>
-      <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text2);">
-        Demo: <strong>ben@example.com</strong> (owner) or <strong>alex@example.com</strong> (player) — pass123
       </div>
     </div>
   </div>`;
@@ -403,9 +399,13 @@ function renderGameColumn(game) {
   } else if (started) actionBtn = `<span style="color:var(--text2);font-size:12px;">Game started</span>`;
 
   let statusBadge = '';
-  if (game.algorithm==='random' && !game.selection_done)
-    statusBadge = `<div style="margin-top:6px;"><span class="badge badge-orange" style="animation:pulse 2s infinite;">⏳ Selection pending</span></div>`;
-  else if (spotsLeft!==null && spotsLeft>0)
+  if (game.algorithm==='random' && !game.selection_done) {
+    let countdownHtml = '';
+    if (isOwner() && game.auto_selection_at) {
+      countdownHtml = `<div style="margin-top:4px;font-size:11px;color:var(--text2);" id="countdown-${game.id}" data-target="${game.auto_selection_at}"></div>`;
+    }
+    statusBadge = `<div style="margin-top:6px;"><span class="badge badge-orange" style="animation:pulse 2s infinite;">⏳ Selection pending</span>${countdownHtml}</div>`;
+  } else if (spotsLeft!==null && spotsLeft>0)
     statusBadge = `<div style="margin-top:6px;"><span class="badge badge-green">${spotsLeft} spot${spotsLeft!==1?'s':''} open</span></div>`;
   else if (spotsLeft===0)
     statusBadge = `<div style="margin-top:6px;"><span class="badge badge-red">Full</span></div>`;
@@ -427,7 +427,7 @@ function renderGameColumn(game) {
   let ownerCtrl = '';
   if (isOwner() && !started) {
     ownerCtrl = `<div style="padding:4px 16px 8px;display:flex;gap:4px;">
-      ${game.algorithm==='random'&&!game.selection_done ? `<button class="btn-secondary btn-sm" style="flex:1;font-size:11px;" onclick="runSelection(${game.id})">Run Selection</button>` : ''}
+      ${game.algorithm==='random'&&!game.selection_done ? `<button class="btn-primary btn-sm" style="flex:1;font-size:11px;" onclick="runSelection(${game.id})">⚡ Set Now</button>` : ''}
       <button class="btn-secondary btn-sm" style="font-size:11px;" onclick="closeGame(${game.id})">Close</button></div>`;
   }
 
@@ -679,20 +679,22 @@ function renderPendingPlayers(pending) {
 
 function renderRoster(approved) {
   const rows = approved.map(p=>{
-    const priorityBadge = {high:`<span class="badge badge-orange">High</span>`,standard:`<span class="badge badge-blue">Standard</span>`,low:`<span class="badge badge-grey">Low</span>`}[p.priority];
     const roleBadge = p.role==='owner'?`<span class="badge badge-green">Owner</span>`:'';
+    const roleBtn = p.id!==currentUser.id ? (p.role==='owner'
+      ? `<button class="btn-secondary btn-sm" onclick="setRole(${p.id},'player')">Remove Owner</button>`
+      : `<button class="btn-secondary btn-sm" onclick="setRole(${p.id},'owner')">Make Owner</button>`) : '';
     return `<tr>
       <td><strong>${esc(p.name)}</strong> ${roleBadge}</td><td>${esc(p.email)}</td><td>${esc(p.mobile)||'—'}</td>
       <td><select style="width:auto;padding:4px 8px;font-size:12px;" onchange="setPriority(${p.id},this.value)">
         <option value="high" ${p.priority==='high'?'selected':''}>High</option>
         <option value="standard" ${p.priority==='standard'?'selected':''}>Standard</option>
         <option value="low" ${p.priority==='low'?'selected':''}>Low</option></select></td>
-      <td>${priorityBadge}</td>
-      <td><div style="display:flex;gap:4px;">
+      <td><div style="display:flex;gap:4px;flex-wrap:wrap;">
+        ${roleBtn}
         <button class="btn-secondary btn-sm" onclick="resetPlayerPass(${p.id})">Reset PW</button>
         ${p.id!==currentUser.id?`<button class="btn-danger btn-sm" onclick="deletePlayer(${p.id})">Delete</button>`:''}</div></td></tr>`;
   }).join('');
-  return `<div class="card" style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Mobile</th><th>Priority</th><th>Badge</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="card" style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Mobile</th><th>Priority</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderAddPlayer() {
@@ -725,6 +727,12 @@ async function denyPlayer(id) {
 }
 async function setPriority(id, priority) {
   try { await api(`/admin/players/${id}`,{method:'PATCH',body:JSON.stringify({priority})}); showToast(`Priority updated`,'success'); await fetchPlayers(); render(); }
+  catch(e) { showToast(e.message,'error'); }
+}
+async function setRole(id, role) {
+  const action = role==='owner' ? 'Make this player an owner?' : 'Remove owner access from this player?';
+  if(!confirm(action)) return;
+  try { await api(`/admin/players/${id}`,{method:'PATCH',body:JSON.stringify({role})}); showToast(role==='owner'?'Player is now an owner':'Owner access removed','success'); await fetchPlayers(); render(); }
   catch(e) { showToast(e.message,'error'); }
 }
 async function resetPlayerPass(id) {
@@ -790,6 +798,31 @@ function closeMobileMenu(e) { if(e.target.classList.contains('mobile-menu')){ mo
 function bindEvents() {
   const dt = document.getElementById('cg-delay-notif');
   if(dt) { const f=document.getElementById('cg-delay-fields'); if(f) f.style.display=dt.checked?'grid':'none'; dt.onchange=()=>{ f.style.display=dt.checked?'grid':'none'; }; }
+  updateCountdowns();
+}
+
+// Countdown timers for auto-selection
+let countdownTimer = null;
+function updateCountdowns() {
+  if(countdownTimer) clearInterval(countdownTimer);
+  const els = document.querySelectorAll('[id^="countdown-"]');
+  if(!els.length) return;
+  function tick() {
+    els.forEach(el => {
+      const target = new Date(el.dataset.target);
+      const now = new Date();
+      const diff = target - now;
+      if(diff <= 0) { el.textContent = 'Auto-selecting now...'; return; }
+      const hrs = Math.floor(diff/3600000);
+      const mins = Math.floor((diff%3600000)/60000);
+      const secs = Math.floor((diff%60000)/1000);
+      if(hrs > 0) el.textContent = `⏱ Auto-selects in ${hrs}h ${mins}m ${secs}s`;
+      else if(mins > 0) el.textContent = `⏱ Auto-selects in ${mins}m ${secs}s`;
+      else el.textContent = `⏱ Auto-selects in ${secs}s`;
+    });
+  }
+  tick();
+  countdownTimer = setInterval(tick, 1000);
 }
 
 // Auto-refresh games every 30s

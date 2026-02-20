@@ -709,6 +709,7 @@ async def list_games(player_id: int = Depends(get_current_player_id)):
                 notified_at=g_dict.get("notified_at"), phase=g_dict["phase"],
                 selection_done=bool(g_dict["selection_done"]),
                 closed=bool(g_dict["closed"]), signups=signups,
+                auto_selection_at=await _get_auto_selection_at(db, g_dict["id"]),
             ))
         return result
     finally:
@@ -945,6 +946,18 @@ async def close_game(game_id: int, owner_id: int = Depends(require_owner)):
         await db.close()
 
 
+async def _get_auto_selection_at(db, game_id: int) -> str | None:
+    """Get the scheduled auto-selection time for a game, if any."""
+    cursor = await db.execute(
+        """SELECT scheduled_at FROM scheduler_jobs
+           WHERE game_id = ? AND job_type = 'run_selection' AND status = 'pending'
+           LIMIT 1""",
+        (game_id,),
+    )
+    row = await cursor.fetchone()
+    return row["scheduled_at"] if row else None
+
+
 async def _get_game_out(db, game_id: int) -> GameOut:
     cursor = await db.execute("SELECT * FROM games WHERE id = ?", (game_id,))
     g = row_to_dict(await cursor.fetchone())
@@ -961,6 +974,7 @@ async def _get_game_out(db, game_id: int) -> GameOut:
         created_by=g["created_by"], created_at=str(g["created_at"]),
         notified_at=g.get("notified_at"), phase=g["phase"],
         selection_done=bool(g["selection_done"]), closed=bool(g["closed"]),
+        auto_selection_at=await _get_auto_selection_at(db, g["id"]),
         signups=[
             SignupOut(
                 id=s["id"], player_id=s["player_id"], player_name=s["player_name"],

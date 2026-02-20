@@ -88,6 +88,7 @@ class GameOut(BaseModel):
     phase: str
     selection_done: bool
     closed: bool
+    auto_selection_at: Optional[str] = None
     signups: list["SignupOut"] = []
 
 
