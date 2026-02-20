@@ -136,7 +136,17 @@ async function api(path, opts = {}) {
     throw new Error('Session expired');
   }
   const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+  if (!res.ok) {
+    // FastAPI returns {detail: string} for HTTPException
+    // and {detail: [{msg, loc, type},...]} for validation errors (422)
+    let msg = `Error ${res.status}`;
+    if (typeof data.detail === 'string') {
+      msg = data.detail;
+    } else if (Array.isArray(data.detail) && data.detail.length > 0) {
+      msg = data.detail.map(e => `${e.loc?.slice(-1)?.[0] || 'field'}: ${e.msg}`).join(', ');
+    }
+    throw new Error(msg);
+  }
   return data;
 }
 
@@ -468,7 +478,11 @@ async function closeGame(gameId) {
 function renderCreateGame() {
   if (!isOwner()) return '<p>Access denied.</p>';
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1);
-  const defaultDate = tomorrow.toISOString().split('T')[0];
+  tomorrow.setHours(18,0,0,0);
+  // datetime-local needs YYYY-MM-DDTHH:MM format
+  const pad = n => String(n).padStart(2,'0');
+  const defaultDT = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth()+1)}-${pad(tomorrow.getDate())}T${pad(tomorrow.getHours())}:${pad(tomorrow.getMinutes())}`;
+  const defaultNotifyDT = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth()+1)}-${pad(tomorrow.getDate())}T12:00`;
   const defAlg = cachedSettings?.default_algorithm || 'first_come';
   const defCap = cachedSettings?.default_cap || 12;
   const defCapOn = cachedSettings?.cap_enabled !== false;
@@ -482,10 +496,7 @@ function renderCreateGame() {
   return `<div class="fade-in" style="max-width:600px;">
     <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">Create Game</h2>
     <div class="card"><div style="display:grid;gap:16px;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Date</label><input type="date" id="cg-date" value="${defaultDate}"></div>
-        <div><label>Start Time</label><input type="time" id="cg-time" value="18:00"></div>
-      </div>
+      <div><label>Game Date &amp; Time</label><input type="datetime-local" id="cg-datetime" value="${defaultDT}"></div>
       <div><label>Location</label><select id="cg-location" onchange="toggleOtherLoc()">${locOptions}<option value="other">Other...</option></select>
         <input type="text" id="cg-other-loc" placeholder="Enter location details" style="display:none;margin-top:8px;"></div>
       <div><label>Algorithm</label><select id="cg-algorithm">
@@ -499,9 +510,8 @@ function renderCreateGame() {
       <div style="display:flex;align-items:center;gap:12px;">
         <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="cg-delay-notif"><span class="slider"></span></label>
         <span style="font-size:14px;">Notify at future time</span></div>
-      <div id="cg-delay-fields" style="display:none;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Notify Date</label><input type="date" id="cg-notify-date" value="${defaultDate}"></div>
-        <div><label>Notify Time</label><input type="time" id="cg-notify-time" value="12:00"></div></div>
+      <div id="cg-delay-fields" style="display:none;">
+        <label>Notification Date &amp; Time</label><input type="datetime-local" id="cg-notify-datetime" value="${defaultNotifyDT}"></div>
       <button class="btn-primary" id="cg-btn" style="width:100%;padding:12px;margin-top:8px;" onclick="createGame()">Create Game</button>
     </div></div></div>`;
 }
@@ -510,23 +520,28 @@ function toggleOtherLoc() { const s=document.getElementById('cg-location'), o=do
 function toggleCapInput() { const on=document.getElementById('cg-cap-on').checked; document.getElementById('cg-cap').style.opacity=on?'1':'0.4'; }
 
 async function createGame() {
-  const date=document.getElementById('cg-date').value, time=document.getElementById('cg-time').value;
-  if(!date||!time) { showToast('Set date and time','error'); return; }
+  const dt = document.getElementById('cg-datetime').value;
+  if(!dt) { showToast('Set a date and time','error'); return; }
+  // Normalize: datetime-local gives "YYYY-MM-DDTHH:MM", we need "YYYY-MM-DDTHH:MM:SS"
+  const gameDate = dt.includes(':') && dt.length === 16 ? dt + ':00' : dt;
+  // Validate it parses
+  if (isNaN(new Date(gameDate).getTime())) { showToast('Invalid date/time — please re-select','error'); return; }
+
   let location = document.getElementById('cg-location').value;
   if(location==='other') location = document.getElementById('cg-other-loc').value || 'TBD';
   const algorithm = document.getElementById('cg-algorithm').value;
   const capEnabled = document.getElementById('cg-cap-on').checked;
   const cap = parseInt(document.getElementById('cg-cap').value)||12;
-  const ownerAdded = [...document.querySelectorAll('.owner-add-player:checked')].map(cb=>parseInt(cb.value));
+  const ownerAdded = [...document.querySelectorAll('.owner-add-player:checked')].map(cb=>parseInt(cb.value)).filter(n=>!isNaN(n));
   let notify_future_at = null;
   if (document.getElementById('cg-delay-notif').checked) {
-    const nd=document.getElementById('cg-notify-date').value, nt=document.getElementById('cg-notify-time').value;
-    if(nd&&nt) notify_future_at = `${nd}T${nt}:00`;
+    const ndt = document.getElementById('cg-notify-datetime').value;
+    if(ndt) notify_future_at = ndt.length === 16 ? ndt + ':00' : ndt;
   }
   const btn=document.getElementById('cg-btn'); btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
   try {
     await api('/games', { method:'POST', body:JSON.stringify({
-      date:`${date}T${time}:00`, location, algorithm, cap, cap_enabled:capEnabled,
+      date:gameDate, location, algorithm, cap, cap_enabled:capEnabled,
       owner_added_player_ids:ownerAdded, notify_future_at
     })});
     showToast('Game created! 🎉','success');
