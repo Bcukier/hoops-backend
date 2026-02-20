@@ -170,6 +170,7 @@ let cachedPendingCount = 0;
 
 let mgmtTab = 'pending';
 let gameRefreshTimer = null;
+let ownerViewMode = true;
 
 // ════════════════════════════════════════════════════════════
 // HELPERS
@@ -463,10 +464,20 @@ function renderGames() {
     <div style="font-size:64px;margin-bottom:16px;">🏀</div>
     <h2 style="font-weight:700;margin-bottom:8px;">No Games Available</h2>
     <p style="color:var(--text2);font-size:14px;">Check back later or ask an admin to create a game.</p></div>`;
+
+  const viewToggle = isOwner() ? `<div style="display:flex;align-items:center;gap:8px;">
+    <span style="font-size:12px;color:${ownerViewMode?'var(--text2)':'var(--orange)'};cursor:pointer;" onclick="ownerViewMode=false;render()">Player</span>
+    <label class="toggle" style="margin:0;"><input type="checkbox" ${ownerViewMode?'checked':''} onchange="ownerViewMode=this.checked;render()"><span class="slider"></span></label>
+    <span style="font-size:12px;color:${ownerViewMode?'var(--orange)':'var(--text2)'};cursor:pointer;" onclick="ownerViewMode=true;render()">Owner</span>
+  </div>` : '';
+
   return `<div class="fade-in">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
       <h2 style="font-weight:800;font-size:24px;">Upcoming Games</h2>
-      <span style="color:var(--text2);font-size:13px;">${games.length} game${games.length!==1?'s':''}</span>
+      <div style="display:flex;align-items:center;gap:12px;">
+        ${viewToggle}
+        <span style="color:var(--text2);font-size:13px;">${games.length} game${games.length!==1?'s':''}</span>
+      </div>
     </div>
     <div class="games-grid">${games.map(g=>renderGameColumn(g)).join('')}</div></div>`;
 }
@@ -507,7 +518,7 @@ function renderGameColumn(game) {
 
   const algLabel = {first_come:'First Come',random:'Random',weighted:'Weighted'}[game.algorithm]||game.algorithm;
   let ownerCtrl = '';
-  if (isOwner() && !started && !game.closed) {
+  if (isOwner() && ownerViewMode && !started && !game.closed) {
     let cascadeStatus = '';
     if (game.notified_at) {
       // Build detailed cascade timeline
