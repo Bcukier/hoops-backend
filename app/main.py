@@ -783,6 +783,17 @@ async def list_games(player_id: int = Depends(get_current_player_id)):
                 )
                 for s in await cursor2.fetchall()
             ]
+
+            # Fetch cascade schedule info
+            cursor3 = await db.execute(
+                "SELECT job_type, scheduled_at, status FROM scheduler_jobs WHERE game_id = ?",
+                (g_dict["id"],),
+            )
+            jobs = {row["job_type"]: dict(row) for row in await cursor3.fetchall()}
+            std_job = jobs.get("notify_standard", {})
+            low_job = jobs.get("notify_low", {})
+            sel_job = jobs.get("run_selection", {})
+
             result.append(GameOut(
                 id=g_dict["id"], date=g_dict["date"], location=g_dict["location"],
                 algorithm=g_dict["algorithm"], cap=g_dict["cap"],
@@ -791,7 +802,11 @@ async def list_games(player_id: int = Depends(get_current_player_id)):
                 notified_at=g_dict.get("notified_at"), phase=g_dict["phase"],
                 selection_done=bool(g_dict["selection_done"]),
                 closed=bool(g_dict["closed"]), signups=signups,
-                auto_selection_at=await _get_auto_selection_at(db, g_dict["id"]),
+                auto_selection_at=sel_job.get("scheduled_at") if sel_job.get("status") == "pending" else None,
+                notify_standard_at=std_job.get("scheduled_at"),
+                notify_low_at=low_job.get("scheduled_at"),
+                notify_standard_status=std_job.get("status"),
+                notify_low_status=low_job.get("status"),
             ))
         return result
     finally:
