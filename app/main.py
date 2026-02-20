@@ -47,6 +47,7 @@ from app.notifications import (
     notify_waitlist_promotion,
     notify_owner_player_drop,
     notify_owners_new_signup,
+    log_notification_config,
 )
 from app.security import (
     SecurityHeadersMiddleware,
@@ -79,6 +80,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await seed_demo_data()
     await scheduler.start()
+    log_notification_config()
     logger.info("🏀 Hoops backend ready (demo=%s)", DEMO_MODE)
     yield
     await scheduler.stop()

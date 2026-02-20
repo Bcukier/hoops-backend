@@ -177,6 +177,18 @@ HOOPS_SECRET_KEY=$SECRET_KEY
 HOOPS_DEMO_MODE=0
 HOOPS_DB_PATH=$DATA_DIR/hoops.db
 HOOPS_ALLOWED_ORIGINS=$ALLOWED_ORIGINS
+
+# ── Email (SendGrid) ──
+# Get your API key at: https://app.sendgrid.com/settings/api_keys
+SENDGRID_API_KEY=
+SENDGRID_FROM_EMAIL=hoops@yourdomain.com
+SENDGRID_FROM_NAME=🏀 Hoops
+
+# ── SMS (Twilio) ──
+# Get credentials at: https://www.twilio.com/console
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_FROM_NUMBER=
 EOF
 
 chown "$APP_USER":"$APP_USER" "$APP_DIR/.env"
