@@ -1,9 +1,10 @@
 """
-Notification service with SendGrid (email) and Twilio (SMS) integration.
+Notification service with Gmail SMTP (email) and Twilio (SMS) integration.
 
 Configure via environment variables:
-  SENDGRID_API_KEY       - SendGrid API key
-  SENDGRID_FROM_EMAIL    - Verified sender email (e.g. hoops@yourdomain.com)
+  GMAIL_ADDRESS          - Gmail address to send from
+  GMAIL_APP_PASSWORD     - Gmail App Password (NOT your regular password)
+                           Generate at: https://myaccount.google.com/apppasswords
   TWILIO_ACCOUNT_SID     - Twilio Account SID
   TWILIO_AUTH_TOKEN      - Twilio Auth Token
   TWILIO_FROM_NUMBER     - Twilio phone number (e.g. +15551234567)
@@ -13,6 +14,9 @@ If credentials are missing, notifications are logged but not delivered.
 import os
 import logging
 import asyncio
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 from functools import partial
 
@@ -24,26 +28,16 @@ logger = logging.getLogger("hoops.notifications")
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════
 
-SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
-SENDGRID_FROM_EMAIL = os.environ.get("SENDGRID_FROM_EMAIL", "hoops@example.com")
-SENDGRID_FROM_NAME = os.environ.get("SENDGRID_FROM_NAME", "🏀 Hoops")
+GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+GMAIL_FROM_NAME = os.environ.get("GMAIL_FROM_NAME", "🏀 Hoops")
 
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")
 
-# Lazy-initialized clients
-_sg_client = None
+# Lazy-initialized client
 _twilio_client = None
-
-
-def _get_sendgrid_client():
-    global _sg_client
-    if _sg_client is None and SENDGRID_API_KEY:
-        from sendgrid import SendGridAPIClient
-        _sg_client = SendGridAPIClient(SENDGRID_API_KEY)
-        logger.info("📧 SendGrid client initialized")
-    return _sg_client
 
 
 def _get_twilio_client():
@@ -56,51 +50,50 @@ def _get_twilio_client():
 
 
 # ═══════════════════════════════════════════════════════════════
-# EMAIL (SendGrid)
+# EMAIL (Gmail SMTP)
 # ═══════════════════════════════════════════════════════════════
 
 def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
-    """Send an email via SendGrid (blocking — run in executor)."""
-    client = _get_sendgrid_client()
-    if not client:
-        logger.warning(f"📧 SendGrid not configured — email to {to_email} logged only")
+    """Send an email via Gmail SMTP (blocking — run in executor)."""
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        logger.warning(f"📧 Gmail not configured — email to {to_email} logged only")
         return False
 
-    from sendgrid.helpers.mail import Mail, Email, To, Content
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{GMAIL_FROM_NAME} <{GMAIL_ADDRESS}>"
+    msg["To"] = to_email
+    msg["Subject"] = subject
 
-    message = Mail(
-        from_email=Email(SENDGRID_FROM_EMAIL, SENDGRID_FROM_NAME),
-        to_emails=To(to_email),
-        subject=subject,
-        plain_text_content=Content("text/plain", body),
-    )
+    # Plain text
+    msg.attach(MIMEText(body, "plain"))
 
-    # Also add an HTML version for nicer rendering
+    # HTML version
     html_body = body.replace("\n", "<br>")
-    message.add_content(Content("text/html", f"""
-        <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;">
-            <h2 style="color:#ff6a2f;">{subject}</h2>
-            <p style="color:#333;line-height:1.6;">{html_body}</p>
-            <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
-            <p style="color:#999;font-size:12px;">Sent by Hoops — Pickup Basketball Manager</p>
-        </div>
-    """))
+    html = f"""\
+    <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+        <h2 style="color:#ff6a2f;">{subject}</h2>
+        <p style="color:#333;line-height:1.6;">{html_body}</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
+        <p style="color:#999;font-size:12px;">Sent by Hoops — Pickup Basketball Manager</p>
+    </div>"""
+    msg.attach(MIMEText(html, "html"))
 
     try:
-        response = client.send(message)
-        if response.status_code in (200, 201, 202):
-            logger.info(f"📧 Email sent to {to_email}: {subject}")
-            return True
-        else:
-            logger.error(f"📧 SendGrid error {response.status_code}: {response.body}")
-            return False
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            server.send_message(msg)
+        logger.info(f"📧 Email sent to {to_email}: {subject}")
+        return True
+    except smtplib.SMTPAuthenticationError:
+        logger.error("📧 Gmail auth failed — check GMAIL_ADDRESS and GMAIL_APP_PASSWORD")
+        return False
     except Exception as e:
-        logger.error(f"📧 SendGrid exception sending to {to_email}: {e}")
+        logger.error(f"📧 Gmail error sending to {to_email}: {e}")
         return False
 
 
 async def send_email(to_email: str, subject: str, body: str) -> bool:
-    """Send email asynchronously via SendGrid."""
+    """Send email asynchronously via Gmail SMTP."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, partial(_send_email_sync, to_email, subject, body))
 
@@ -359,15 +352,15 @@ async def notify_owners_new_signup(
 
 def log_notification_config():
     """Log which notification channels are configured."""
-    email_ok = bool(SENDGRID_API_KEY)
+    email_ok = bool(GMAIL_ADDRESS and GMAIL_APP_PASSWORD)
     sms_ok = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER)
 
     logger.info(
         f"📬 Notification config: "
-        f"email={'✅ SendGrid' if email_ok else '❌ not configured'}, "
+        f"email={'✅ Gmail' if email_ok else '❌ not configured'}, "
         f"sms={'✅ Twilio' if sms_ok else '❌ not configured'}"
     )
     if not email_ok:
-        logger.info("   Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL to enable email")
+        logger.info("   Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD to enable email")
     if not sms_ok:
         logger.info("   Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER to enable SMS")
