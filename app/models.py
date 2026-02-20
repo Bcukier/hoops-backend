@@ -89,6 +89,10 @@ class GameOut(BaseModel):
     selection_done: bool
     closed: bool
     auto_selection_at: Optional[str] = None
+    notify_standard_at: Optional[str] = None
+    notify_low_at: Optional[str] = None
+    notify_standard_status: Optional[str] = None
+    notify_low_status: Optional[str] = None
     signups: list["SignupOut"] = []
 
 

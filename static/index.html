@@ -240,6 +240,7 @@ function render() {
   const app = document.getElementById('app');
   if (currentPage === 'login') { app.innerHTML = renderLogin(); return; }
   if (currentPage === 'signup') { app.innerHTML = renderNewSignup(); return; }
+  if (currentPage === 'reset_password') { app.innerHTML = renderResetPassword(); return; }
 
   let nav = renderNav();
   let content = '';
@@ -253,32 +254,10 @@ function render() {
   }
   app.innerHTML = nav + `<main style="max-width:1200px;margin:0 auto;padding:20px;">${content}</main>`;
   bindEvents();
-  startCountdownTickers();
 }
 
 // ── Countdown Ticker ─────────────────────────────────────────
-let _countdownInterval = null;
-function startCountdownTickers() {
-  if (_countdownInterval) clearInterval(_countdownInterval);
-  const tick = () => {
-    document.querySelectorAll('[id^="countdown-"]').forEach(el => {
-      const target = new Date(el.dataset.target);
-      const now = new Date();
-      const diff = target - now;
-      if (diff <= 0) { el.textContent = '⚡ Auto-selecting now...'; return; }
-      const h = Math.floor(diff/3600000);
-      const m = Math.floor((diff%3600000)/60000);
-      const s = Math.floor((diff%60000)/1000);
-      const parts = [];
-      if (h > 0) parts.push(`${h}h`);
-      parts.push(`${m}m`);
-      parts.push(`${s}s`);
-      el.textContent = `⏱ Auto-select in ${parts.join(' ')}`;
-    });
-  };
-  tick();
-  _countdownInterval = setInterval(tick, 1000);
-}
+// (handled by updateCountdowns in bindEvents)
 
 function renderNav() {
   const pc = cachedPendingCount;
@@ -323,8 +302,9 @@ function renderLogin() {
           onkeydown="if(event.key==='Enter')doLogin()">
         <button class="btn-primary" id="login-btn" style="width:100%;padding:12px;" onclick="doLogin()">Sign In</button>
       </div>
-      <div style="margin-top:20px;display:flex;justify-content:center;font-size:13px;">
+      <div style="margin-top:20px;display:flex;justify-content:center;gap:16px;font-size:13px;">
         <a style="color:var(--orange);cursor:pointer;" onclick="navigate('signup')">New player? Sign up</a>
+        <a style="color:var(--text2);cursor:pointer;" onclick="doResetPassword()">Forgot password?</a>
       </div>
     </div>
   </div>`;
@@ -356,6 +336,41 @@ async function doResetPassword() {
   const email = document.getElementById('login-email').value.trim();
   if (!email) { showToast('Enter your email first','error'); return; }
   try { await api(`/auth/reset-password?email=${encodeURIComponent(email)}`, {method:'POST'}); showToast('Reset link sent if account exists','success'); } catch(e) { showToast(e.message,'error'); }
+}
+
+function renderResetPassword() {
+  return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
+    <div class="card glow-border fade-in" style="max-width:400px;width:100%;text-align:center;">
+      <div style="font-size:48px;margin-bottom:8px;">🔑</div>
+      <h2 style="font-size:24px;font-weight:800;margin-bottom:4px;">Reset Password</h2>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:24px;">Enter your new password below.</p>
+      <div style="text-align:left;">
+        <label>New Password</label>
+        <input type="password" id="reset-pass" placeholder="New password" style="margin-bottom:12px;">
+        <label>Confirm Password</label>
+        <input type="password" id="reset-pass2" placeholder="Confirm password" style="margin-bottom:20px;"
+          onkeydown="if(event.key==='Enter')doConfirmReset()">
+        <button class="btn-primary" id="reset-btn" style="width:100%;padding:12px;" onclick="doConfirmReset()">Set New Password</button>
+      </div>
+      <p style="margin-top:16px;font-size:13px;"><a style="color:var(--orange);cursor:pointer;" onclick="window.history.replaceState({},'','/');navigate('login')">← Back to login</a></p>
+    </div>
+  </div>`;
+}
+
+async function doConfirmReset() {
+  const pass = document.getElementById('reset-pass').value;
+  const pass2 = document.getElementById('reset-pass2').value;
+  if (!pass || pass.length < 4) { showToast('Password must be at least 4 characters','error'); return; }
+  if (pass !== pass2) { showToast('Passwords do not match','error'); return; }
+  const btn = document.getElementById('reset-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const token = window._resetToken;
+    const r = await api(`/auth/reset-password/confirm?token=${encodeURIComponent(token)}&new_password=${encodeURIComponent(pass)}`, {method:'POST'});
+    showToast(r.message, 'success');
+    window.history.replaceState({}, '', '/');
+    setTimeout(() => navigate('login'), 1500);
+  } catch(e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'Set New Password'; }
 }
 
 // ═══ NEW PLAYER SIGNUP ═══════════════════════════════════════
@@ -445,14 +460,46 @@ function renderGameColumn(game) {
 
   const algLabel = {first_come:'First Come',random:'Random',weighted:'Weighted'}[game.algorithm]||game.algorithm;
   let ownerCtrl = '';
-  if (isOwner() && !started) {
-    let countdownHtml = '';
-    if (game.algorithm==='random' && !game.selection_done && game.auto_selection_at) {
-      countdownHtml = `<div id="countdown-${game.id}" style="font-size:11px;color:var(--text2);text-align:center;padding:0 16px 4px;" data-target="${game.auto_selection_at}"></div>`;
+  if (isOwner() && !started && !game.closed) {
+    let cascadeStatus = '';
+    if (game.notified_at) {
+      // Build detailed cascade timeline
+      let steps = [];
+
+      // High priority
+      steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--green);">✅</span> <span>High priority notified</span></div>`);
+
+      // Standard priority
+      if (game.notify_standard_status === 'completed') {
+        steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--green);">✅</span> <span>Standard priority notified</span></div>`);
+      } else if (game.notify_standard_at) {
+        steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span>⏳</span> <span>Standard priority <span id="cd-std-${game.id}" data-target="${game.notify_standard_at}" class="cascade-cd"></span></span></div>`);
+      }
+
+      // Selection (random only)
+      if (game.algorithm === 'random') {
+        if (game.selection_done) {
+          steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--green);">✅</span> <span>Players selected</span></div>`);
+        } else if (game.auto_selection_at) {
+          steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span>🎲</span> <span>Auto-select <span id="cd-sel-${game.id}" data-target="${game.auto_selection_at}" class="cascade-cd"></span></span></div>`);
+        }
+      }
+
+      // Low priority
+      if (game.notify_low_status === 'completed') {
+        steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--green);">✅</span> <span>Low priority notified</span></div>`);
+      } else if (game.notify_low_at) {
+        steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span>⏳</span> <span>Low priority <span id="cd-low-${game.id}" data-target="${game.notify_low_at}" class="cascade-cd"></span></span></div>`);
+      }
+
+      if (steps.length > 0) {
+        cascadeStatus = `<div style="padding:4px 16px 8px;font-size:11px;color:var(--text2);display:grid;gap:3px;">${steps.join('')}</div>`;
+      }
     }
-    ownerCtrl = `${countdownHtml}<div style="padding:4px 16px 8px;display:flex;gap:4px;">
+
+    ownerCtrl = `${cascadeStatus}<div style="padding:4px 16px 8px;display:flex;gap:4px;">
       ${game.algorithm==='random'&&!game.selection_done ? `<button class="btn-primary btn-sm" style="flex:1;font-size:11px;" onclick="runSelection(${game.id})">⚡ Set Now</button>` : ''}
-      <button class="btn-secondary btn-sm" style="font-size:11px;" onclick="closeGame(${game.id})">Close</button></div>`;
+      <button class="btn-danger btn-sm" style="font-size:11px;" onclick="cancelGame(${game.id})">Cancel</button></div>`;
   }
 
   return `<div class="game-col slide-in">
@@ -493,8 +540,14 @@ async function runSelection(gameId) {
   } catch(e) { showToast(e.message,'error'); }
 }
 
-async function closeGame(gameId) {
-  try { await api(`/games/${gameId}/close`, {method:'POST'}); showToast('Game closed','success'); await fetchGames(); render(); }
+async function cancelGame(gameId) {
+  const game = cachedGames.find(g => g.id === gameId);
+  const signupCount = game ? game.signups.length : 0;
+  const msg = signupCount > 0
+    ? `Cancel this game? ${signupCount} signed-up player${signupCount!==1?'s':''} will be notified.`
+    : 'Cancel this game?';
+  if (!confirm(msg)) return;
+  try { await api(`/games/${gameId}/close`, {method:'POST'}); showToast('Game cancelled — players notified','success'); await fetchGames(); render(); }
   catch(e) { showToast(e.message,'error'); }
 }
 
@@ -825,24 +878,34 @@ function bindEvents() {
   updateCountdowns();
 }
 
-// Countdown timers for auto-selection
+// Countdown timers for auto-selection and cascade
 let countdownTimer = null;
 function updateCountdowns() {
   if(countdownTimer) clearInterval(countdownTimer);
-  const els = document.querySelectorAll('[id^="countdown-"]');
+  const els = document.querySelectorAll('[data-target]');
   if(!els.length) return;
   function tick() {
     els.forEach(el => {
       const target = new Date(el.dataset.target);
       const now = new Date();
       const diff = target - now;
-      if(diff <= 0) { el.textContent = 'Auto-selecting now...'; return; }
+      if(diff <= 0) {
+        el.textContent = el.classList.contains('cascade-cd') ? '(done)' : 'Auto-selecting now...';
+        return;
+      }
       const hrs = Math.floor(diff/3600000);
       const mins = Math.floor((diff%3600000)/60000);
       const secs = Math.floor((diff%60000)/1000);
-      if(hrs > 0) el.textContent = `⏱ Auto-selects in ${hrs}h ${mins}m ${secs}s`;
-      else if(mins > 0) el.textContent = `⏱ Auto-selects in ${mins}m ${secs}s`;
-      else el.textContent = `⏱ Auto-selects in ${secs}s`;
+      let timeStr;
+      if(hrs > 0) timeStr = `${hrs}h ${mins}m`;
+      else if(mins > 0) timeStr = `${mins}m ${secs}s`;
+      else timeStr = `${secs}s`;
+
+      if (el.classList.contains('cascade-cd')) {
+        el.textContent = `in ${timeStr}`;
+      } else {
+        el.textContent = `⏱ Auto-selects in ${timeStr}`;
+      }
     });
   }
   tick();
@@ -863,6 +926,16 @@ function stopGameRefresh() { if(gameRefreshTimer) { clearInterval(gameRefreshTim
 
 // ═══ INIT ════════════════════════════════════════════════════
 (async function init() {
+  // Check for password reset token in URL
+  const params = new URLSearchParams(window.location.search);
+  const resetToken = params.get('reset');
+  if (resetToken) {
+    currentPage = 'reset_password';
+    window._resetToken = resetToken;
+    render();
+    return;
+  }
+
   if (currentUser && getToken()) {
     // Validate stored session
     try {

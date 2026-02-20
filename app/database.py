@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS games (
     notify_future_at TEXT,
     phase TEXT NOT NULL DEFAULT 'created'
         CHECK(phase IN ('created','notifying_high','notifying_standard',
-                        'notifying_low','signup','active','closed')),
+                        'notifying_low','signup','active','closed','cancelled')),
     selection_done INTEGER DEFAULT 0,
     closed INTEGER DEFAULT 0,
     FOREIGN KEY (created_by) REFERENCES players(id)
@@ -124,6 +124,17 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_scheduler_pending
     ON scheduler_jobs(status, scheduled_at);
+
+-- ── Password Reset Tokens ───────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 DEFAULT_SETTINGS = {

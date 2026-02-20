@@ -346,6 +346,42 @@ async def notify_owners_new_signup(
         )
 
 
+async def notify_game_cancelled(
+    db: aiosqlite.Connection,
+    game_id: int,
+    player_ids: list[int],
+    game_date: str,
+    game_location: str,
+):
+    """Notify all signed-up players that a game has been cancelled."""
+    try:
+        from datetime import datetime as dt
+        d = dt.fromisoformat(game_date)
+        weekday = d.strftime("%A")
+        nice_date = d.strftime("%B %d")
+    except Exception:
+        weekday = ""
+        nice_date = game_date
+
+    subject = f"{weekday} game on {nice_date} at {game_location} has been cancelled"
+
+    for pid in player_ids:
+        cursor = await db.execute(
+            "SELECT notif_pref FROM players WHERE id = ?", (pid,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            continue
+        channel = row["notif_pref"]
+        body = (
+            f"The {weekday} game has been cancelled.\n\n"
+            f"📍 {game_location}\n"
+            f"🕐 {weekday}, {nice_date}\n\n"
+            f"We'll let you know when the next game is scheduled."
+        )
+        await send_notification(db, pid, channel, subject, body)
+
+
 # ═══════════════════════════════════════════════════════════════
 # STARTUP DIAGNOSTICS
 # ═══════════════════════════════════════════════════════════════

@@ -365,8 +365,90 @@ async def logout(request: Request):
 
 @app.post("/api/auth/reset-password")
 async def request_password_reset(email: str = Query(...)):
-    """In production, sends a password reset email. For now, just acknowledges."""
-    return {"message": "If an account with that email exists, a reset link has been sent."}
+    """Generate a reset token and send it via email or SMS."""
+    import secrets
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, email, mobile, notif_pref FROM players WHERE email = ?",
+            (email.lower().strip(),),
+        )
+        player = await cursor.fetchone()
+        if not player:
+            # Don't reveal whether account exists
+            return {"message": "If an account with that email exists, a reset link has been sent."}
+
+        # Generate token
+        token = secrets.token_urlsafe(32)
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+        # Clean up old tokens for this player
+        await db.execute(
+            "DELETE FROM password_reset_tokens WHERE player_id = ?", (player["id"],)
+        )
+        await db.execute(
+            "INSERT INTO password_reset_tokens (player_id, token, expires_at) VALUES (?, ?, ?)",
+            (player["id"], token, expires),
+        )
+        await db.commit()
+
+        # Build reset link
+        base_url = os.environ.get("HOOPS_BASE_URL", "http://142.93.13.21")
+        reset_link = f"{base_url}?reset={token}"
+
+        # Send via preferred channel
+        from app.notifications import send_email, send_sms
+        subject = "🏀 Hoops — Password Reset"
+        body = f"Click this link to reset your password (expires in 1 hour):\n\n{reset_link}\n\nIf you didn't request this, you can ignore this email."
+
+        if player["notif_pref"] == "sms" and player["mobile"]:
+            asyncio.create_task(send_sms(
+                player["mobile"],
+                f"Hoops password reset:\n{reset_link}\n\nExpires in 1 hour."
+            ))
+        else:
+            asyncio.create_task(send_email(player["email"], subject, body))
+
+        return {"message": "If an account with that email exists, a reset link has been sent."}
+    finally:
+        await db.close()
+
+
+@app.post("/api/auth/reset-password/confirm")
+async def confirm_password_reset(token: str = Query(...), new_password: str = Query(...)):
+    """Validate the reset token and set a new password."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM password_reset_tokens
+               WHERE token = ? AND used = 0""",
+            (token,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(400, "Invalid or expired reset link")
+
+        expires = datetime.fromisoformat(row["expires_at"])
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires:
+            raise HTTPException(400, "Reset link has expired")
+
+        valid, msg = validate_pw(new_password)
+        if not valid:
+            raise HTTPException(400, msg)
+
+        await db.execute(
+            "UPDATE players SET password_hash = ? WHERE id = ?",
+            (hash_password(new_password), row["player_id"]),
+        )
+        await db.execute(
+            "UPDATE password_reset_tokens SET used = 1 WHERE id = ?", (row["id"],)
+        )
+        await db.commit()
+        return {"message": "Password has been reset. You can now log in."}
+    finally:
+        await db.close()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -937,25 +1019,56 @@ async def run_selection(game_id: int, owner_id: int = Depends(require_owner)):
 async def close_game(game_id: int, owner_id: int = Depends(require_owner)):
     db = await get_db()
     try:
+        # Get game info before closing
+        cursor = await db.execute("SELECT * FROM games WHERE id = ?", (game_id,))
+        game = await cursor.fetchone()
+        if not game:
+            raise HTTPException(404, "Game not found")
+
+        # Get all signed-up players
+        cursor2 = await db.execute(
+            """SELECT gs.player_id, p.name FROM game_signups gs
+               JOIN players p ON p.id = gs.player_id
+               WHERE gs.game_id = ?""",
+            (game_id,),
+        )
+        signed_up = await cursor2.fetchall()
+
+        # Close the game and cancel pending scheduler jobs
         await db.execute(
-            "UPDATE games SET closed = 1, phase = 'closed' WHERE id = ?", (game_id,)
+            "UPDATE games SET closed = 1, phase = 'cancelled' WHERE id = ?", (game_id,)
+        )
+        await db.execute(
+            "UPDATE scheduler_jobs SET status = 'completed' WHERE game_id = ? AND status = 'pending'",
+            (game_id,),
         )
         await db.commit()
-        return {"message": "Game closed"}
+
+        # Notify all signed-up players in background
+        if signed_up:
+            player_ids = [row["player_id"] for row in signed_up]
+            game_date = game["date"]
+            game_location = game["location"]
+            asyncio.create_task(_send_cancel_notifications(
+                game_id, player_ids, game_date, game_location
+            ))
+
+        return {"message": "Game cancelled"}
     finally:
         await db.close()
 
 
-async def _get_auto_selection_at(db, game_id: int) -> str | None:
-    """Get the scheduled auto-selection time for a game, if any."""
-    cursor = await db.execute(
-        """SELECT scheduled_at FROM scheduler_jobs
-           WHERE game_id = ? AND job_type = 'run_selection' AND status = 'pending'
-           LIMIT 1""",
-        (game_id,),
-    )
-    row = await cursor.fetchone()
-    return row["scheduled_at"] if row else None
+async def _send_cancel_notifications(game_id, player_ids, game_date, game_location):
+    """Background task to send cancellation notifications."""
+    try:
+        from app.notifications import notify_game_cancelled
+        db = await get_db()
+        try:
+            await notify_game_cancelled(db, game_id, player_ids, game_date, game_location)
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.error(f"Cancel notification error for game {game_id}: {e}")
 
 
 async def _get_game_out(db, game_id: int) -> GameOut:
@@ -968,13 +1081,30 @@ async def _get_game_out(db, game_id: int) -> GameOut:
         (game_id,),
     )
     signups = await cursor2.fetchall()
+
+    # Fetch cascade schedule info
+    cursor3 = await db.execute(
+        """SELECT job_type, scheduled_at, status FROM scheduler_jobs
+           WHERE game_id = ?""",
+        (game_id,),
+    )
+    jobs = {row["job_type"]: dict(row) for row in await cursor3.fetchall()}
+
+    std_job = jobs.get("notify_standard", {})
+    low_job = jobs.get("notify_low", {})
+    sel_job = jobs.get("run_selection", {})
+
     return GameOut(
         id=g["id"], date=g["date"], location=g["location"],
         algorithm=g["algorithm"], cap=g["cap"], cap_enabled=bool(g["cap_enabled"]),
         created_by=g["created_by"], created_at=str(g["created_at"]),
         notified_at=g.get("notified_at"), phase=g["phase"],
         selection_done=bool(g["selection_done"]), closed=bool(g["closed"]),
-        auto_selection_at=await _get_auto_selection_at(db, g["id"]),
+        auto_selection_at=sel_job.get("scheduled_at") if sel_job.get("status") == "pending" else None,
+        notify_standard_at=std_job.get("scheduled_at"),
+        notify_low_at=low_job.get("scheduled_at"),
+        notify_standard_status=std_job.get("status"),
+        notify_low_status=low_job.get("status"),
         signups=[
             SignupOut(
                 id=s["id"], player_id=s["player_id"], player_name=s["player_name"],
