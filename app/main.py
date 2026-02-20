@@ -1059,7 +1059,7 @@ async def close_game(game_id: int, owner_id: int = Depends(require_owner)):
 
         # Close the game and cancel pending scheduler jobs
         await db.execute(
-            "UPDATE games SET closed = 1, phase = 'cancelled' WHERE id = ?", (game_id,)
+            "UPDATE games SET closed = 1, phase = 'closed' WHERE id = ?", (game_id,)
         )
         await db.execute(
             "UPDATE scheduler_jobs SET status = 'completed' WHERE game_id = ? AND status = 'pending'",
