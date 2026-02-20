@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS players (
     priority TEXT NOT NULL DEFAULT 'standard' CHECK(priority IN ('high','standard','low')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied')),
     notif_pref TEXT NOT NULL DEFAULT 'email' CHECK(notif_pref IN ('email','sms','push')),
+    force_password_change INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -171,6 +172,12 @@ async def init_db():
     db = await get_db()
     try:
         await db.executescript(SCHEMA)
+
+        # Migration: add force_password_change if missing
+        cursor = await db.execute("PRAGMA table_info(players)")
+        cols = {row["name"] for row in await cursor.fetchall()}
+        if "force_password_change" not in cols:
+            await db.execute("ALTER TABLE players ADD COLUMN force_password_change INTEGER DEFAULT 0")
 
         cursor = await db.execute("SELECT COUNT(*) as c FROM settings")
         row = await cursor.fetchone()

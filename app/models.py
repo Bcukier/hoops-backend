@@ -22,7 +22,7 @@ class PlayerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: str = Field(..., min_length=3, max_length=254)
     mobile: str = Field(default="", max_length=20)
-    password: str = Field(..., min_length=4, max_length=128)
+    password: Optional[str] = Field(default=None, min_length=4, max_length=128)
     notif_pref: str = "email"
 
 
@@ -35,6 +35,7 @@ class PlayerOut(BaseModel):
     priority: str
     status: str
     notif_pref: str
+    force_password_change: bool = False
     created_at: str
 
 

@@ -241,6 +241,7 @@ function render() {
   if (currentPage === 'login') { app.innerHTML = renderLogin(); return; }
   if (currentPage === 'signup') { app.innerHTML = renderNewSignup(); return; }
   if (currentPage === 'reset_password') { app.innerHTML = renderResetPassword(); return; }
+  if (currentPage === 'force_change_pw') { app.innerHTML = renderForceChangePassword(); return; }
 
   let nav = renderNav();
   let content = '';
@@ -321,6 +322,13 @@ async function doLogin() {
     setToken(data.access_token);
     currentUser = data.player;
     setStoredUser(currentUser);
+
+    if (currentUser.force_password_change) {
+      currentPage = 'force_change_pw';
+      render();
+      return;
+    }
+
     currentPage = 'games';
     await loadPageData();
     render();
@@ -371,6 +379,45 @@ async function doConfirmReset() {
     window.history.replaceState({}, '', '/');
     setTimeout(() => navigate('login'), 1500);
   } catch(e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'Set New Password'; }
+}
+
+// ═══ FORCED PASSWORD CHANGE ═════════════════════════════════
+function renderForceChangePassword() {
+  return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
+    <div class="card glow-border fade-in" style="max-width:400px;width:100%;text-align:center;">
+      <div style="font-size:48px;margin-bottom:8px;">🔐</div>
+      <h2 style="font-size:24px;font-weight:800;margin-bottom:4px;">Change Your Password</h2>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:24px;">Your account was created with a temporary password. Please set a new one to continue.</p>
+      <div style="text-align:left;">
+        <label>New Password</label>
+        <input type="password" id="fcp-pass" placeholder="Choose a new password" style="margin-bottom:12px;">
+        <label>Confirm Password</label>
+        <input type="password" id="fcp-pass2" placeholder="Confirm new password" style="margin-bottom:20px;"
+          onkeydown="if(event.key==='Enter')doForceChangePassword()">
+        <button class="btn-primary" id="fcp-btn" style="width:100%;padding:12px;" onclick="doForceChangePassword()">Set Password &amp; Continue</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function doForceChangePassword() {
+  const pass = document.getElementById('fcp-pass').value;
+  const pass2 = document.getElementById('fcp-pass2').value;
+  if (!pass || pass.length < 4) { showToast('Password must be at least 4 characters','error'); return; }
+  if (pass !== pass2) { showToast('Passwords do not match','error'); return; }
+  if (pass === currentUser.email) { showToast('Password cannot be your email address','error'); return; }
+  const btn = document.getElementById('fcp-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const updated = await api('/players/me', { method:'PATCH', body:JSON.stringify({password:pass}) });
+    currentUser = updated;
+    setStoredUser(currentUser);
+    showToast('Password updated!','success');
+    currentPage = 'games';
+    await loadPageData();
+    render();
+    startGameRefresh();
+  } catch(e) { showToast(e.message,'error'); btn.disabled=false; btn.textContent='Set Password & Continue'; }
 }
 
 // ═══ NEW PLAYER SIGNUP ═══════════════════════════════════════
@@ -782,11 +829,12 @@ function renderAddPlayer() {
       <div><label>Email</label><input type="email" id="ap-email" placeholder="email@example.com"></div>
       <div><label>Mobile</label><input type="tel" id="ap-mobile" placeholder="555-0123"></div>
       <div><label>Priority</label><select id="ap-priority"><option value="high">High</option><option value="standard" selected>Standard</option><option value="low">Low</option></select></div>
+      <p style="font-size:12px;color:var(--text2);margin:0;">Default password = their email. They'll be prompted to change it on first login.</p>
       <button class="btn-primary" onclick="addNewPlayer()">Add Player</button>
     </div>
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
       <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;">Import CSV</h3>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">CSV format: name, email, mobile (one per line)</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">CSV format: name, email, mobile (one per line). Default password = email.</p>
       <textarea id="csv-import" rows="4" placeholder="John Doe,john@email.com,555-0123"></textarea>
       <button class="btn-secondary" style="margin-top:8px;width:100%;" onclick="importCSV()">Import Players</button>
     </div></div>`;
@@ -826,7 +874,7 @@ async function addNewPlayer() {
   const mobile=document.getElementById('ap-mobile').value.trim(), priority=document.getElementById('ap-priority').value;
   if(!name||!email) { showToast('Name and email required','error'); return; }
   try {
-    await api(`/admin/players/add?priority=${priority}`,{method:'POST',body:JSON.stringify({name,email,mobile,password:'welcome123',notif_pref:'email'})});
+    await api(`/admin/players/add?priority=${priority}`,{method:'POST',body:JSON.stringify({name,email,mobile,notif_pref:'email'})});
     showToast(`${name} added!`,'success'); await fetchPlayers(); render();
   } catch(e) { showToast(e.message,'error'); }
 }
@@ -941,6 +989,13 @@ function stopGameRefresh() { if(gameRefreshTimer) { clearInterval(gameRefreshTim
     try {
       const me = await api('/players/me');
       currentUser = me; setStoredUser(me);
+
+      if (currentUser.force_password_change) {
+        currentPage = 'force_change_pw';
+        render();
+        return;
+      }
+
       currentPage = 'games';
       await loadPageData();
       render();

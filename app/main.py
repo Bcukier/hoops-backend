@@ -140,7 +140,8 @@ def player_from_row(row) -> PlayerOut:
     return PlayerOut(
         id=d["id"], name=d["name"], email=d["email"], mobile=d.get("mobile", ""),
         role=d["role"], priority=d["priority"], status=d["status"],
-        notif_pref=d["notif_pref"], created_at=str(d["created_at"]),
+        notif_pref=d["notif_pref"], force_password_change=bool(d.get("force_password_change", 0)),
+        created_at=str(d["created_at"]),
     )
 
 
@@ -305,6 +306,8 @@ async def register(req: PlayerCreate, request: Request):
         raise HTTPException(400, "Invalid email format")
     if mobile and not validate_phone(mobile):
         raise HTTPException(400, "Invalid phone number format")
+    if not req.password:
+        raise HTTPException(400, "Password is required")
 
     # Validate password
     valid, msg = validate_pw(req.password)
@@ -498,6 +501,8 @@ async def update_me(req: PlayerUpdate, player_id: int = Depends(get_current_play
                 raise HTTPException(400, msg)
             updates.append("password_hash = ?")
             params.append(hash_password(req.password))
+            # Clear forced password change flag
+            updates.append("force_password_change = 0")
         if req.notif_pref is not None:
             if req.notif_pref not in ("email", "sms", "push"):
                 raise HTTPException(400, "Invalid notification preference")
@@ -639,14 +644,14 @@ async def delete_player(pid: int, owner_id: int = Depends(require_owner)):
 async def admin_reset_password(pid: int, owner_id: int = Depends(require_owner)):
     db = await get_db()
     try:
-        await get_player_or_404(db, pid)
-        temp_pw = "reset123"
+        player = await get_player_or_404(db, pid)
+        # Reset password to player's email; they must change on next login
         await db.execute(
-            "UPDATE players SET password_hash = ? WHERE id = ?",
-            (hash_password(temp_pw), pid),
+            "UPDATE players SET password_hash = ?, force_password_change = 1 WHERE id = ?",
+            (hash_password(player["email"]), pid),
         )
         await db.commit()
-        return {"message": f"Password reset. Temporary password: {temp_pw}"}
+        return {"message": f"Password reset to player's email address. They'll be prompted to change it on login."}
     finally:
         await db.close()
 
@@ -669,11 +674,13 @@ async def admin_add_player(
         cursor = await db.execute("SELECT id FROM players WHERE email = ?", (email,))
         if await cursor.fetchone():
             raise HTTPException(400, "Email already registered")
-        pw_hash = hash_password(req.password if req.password else "welcome123")
+        # Default password is the player's email; they must change on first login
+        pw_hash = hash_password(req.password if req.password else email)
+        force_change = 0 if req.password else 1
         cursor = await db.execute(
-            """INSERT INTO players (name, email, mobile, password_hash, priority, status, notif_pref)
-               VALUES (?, ?, ?, ?, ?, 'approved', ?)""",
-            (name, email, sanitize_string(req.mobile, 20), pw_hash, priority, req.notif_pref or "email"),
+            """INSERT INTO players (name, email, mobile, password_hash, priority, status, notif_pref, force_password_change)
+               VALUES (?, ?, ?, ?, ?, 'approved', ?, ?)""",
+            (name, email, sanitize_string(req.mobile, 20), pw_hash, priority, req.notif_pref or "email", force_change),
         )
         await db.commit()
         return player_from_row(await get_player_or_404(db, cursor.lastrowid))
@@ -696,7 +703,6 @@ async def import_players(
         text = content.decode("utf-8", errors="ignore")
         reader = csv.reader(io.StringIO(text))
         added, errors = 0, []
-        pw_hash = hash_password("welcome123")
         for i, row in enumerate(reader):
             if i > 500:  # Max 500 rows
                 errors.append("Stopped at 500 rows")
@@ -714,9 +720,11 @@ async def import_players(
             if await cursor.fetchone():
                 errors.append(f"Row {i+1}: {email} already exists")
                 continue
+            # Default password = email; player must change on first login
+            pw_hash = hash_password(email)
             await db.execute(
-                """INSERT INTO players (name, email, mobile, password_hash, status, notif_pref)
-                   VALUES (?, ?, ?, ?, 'approved', 'email')""",
+                """INSERT INTO players (name, email, mobile, password_hash, status, notif_pref, force_password_change)
+                   VALUES (?, ?, ?, ?, 'approved', 'email', 1)""",
                 (name, email, mobile, pw_hash),
             )
             added += 1
