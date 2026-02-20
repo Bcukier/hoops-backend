@@ -253,6 +253,31 @@ function render() {
   }
   app.innerHTML = nav + `<main style="max-width:1200px;margin:0 auto;padding:20px;">${content}</main>`;
   bindEvents();
+  startCountdownTickers();
+}
+
+// ── Countdown Ticker ─────────────────────────────────────────
+let _countdownInterval = null;
+function startCountdownTickers() {
+  if (_countdownInterval) clearInterval(_countdownInterval);
+  const tick = () => {
+    document.querySelectorAll('[id^="countdown-"]').forEach(el => {
+      const target = new Date(el.dataset.target);
+      const now = new Date();
+      const diff = target - now;
+      if (diff <= 0) { el.textContent = '⚡ Auto-selecting now...'; return; }
+      const h = Math.floor(diff/3600000);
+      const m = Math.floor((diff%3600000)/60000);
+      const s = Math.floor((diff%60000)/1000);
+      const parts = [];
+      if (h > 0) parts.push(`${h}h`);
+      parts.push(`${m}m`);
+      parts.push(`${s}s`);
+      el.textContent = `⏱ Auto-select in ${parts.join(' ')}`;
+    });
+  };
+  tick();
+  _countdownInterval = setInterval(tick, 1000);
 }
 
 function renderNav() {
@@ -399,13 +424,8 @@ function renderGameColumn(game) {
   } else if (started) actionBtn = `<span style="color:var(--text2);font-size:12px;">Game started</span>`;
 
   let statusBadge = '';
-  if (game.algorithm==='random' && !game.selection_done) {
-    let countdownHtml = '';
-    if (isOwner() && game.auto_selection_at) {
-      countdownHtml = `<div style="margin-top:4px;font-size:11px;color:var(--text2);" id="countdown-${game.id}" data-target="${game.auto_selection_at}"></div>`;
-    }
-    statusBadge = `<div style="margin-top:6px;"><span class="badge badge-orange" style="animation:pulse 2s infinite;">⏳ Selection pending</span>${countdownHtml}</div>`;
-  } else if (spotsLeft!==null && spotsLeft>0)
+  if (game.algorithm==='random' && !game.selection_done)
+    statusBadge = `<div style="margin-top:6px;"><span class="badge badge-orange" style="animation:pulse 2s infinite;">⏳ Selection pending</span></div>`; else if (spotsLeft!==null && spotsLeft>0)
     statusBadge = `<div style="margin-top:6px;"><span class="badge badge-green">${spotsLeft} spot${spotsLeft!==1?'s':''} open</span></div>`;
   else if (spotsLeft===0)
     statusBadge = `<div style="margin-top:6px;"><span class="badge badge-red">Full</span></div>`;
@@ -426,7 +446,11 @@ function renderGameColumn(game) {
   const algLabel = {first_come:'First Come',random:'Random',weighted:'Weighted'}[game.algorithm]||game.algorithm;
   let ownerCtrl = '';
   if (isOwner() && !started) {
-    ownerCtrl = `<div style="padding:4px 16px 8px;display:flex;gap:4px;">
+    let countdownHtml = '';
+    if (game.algorithm==='random' && !game.selection_done && game.auto_selection_at) {
+      countdownHtml = `<div id="countdown-${game.id}" style="font-size:11px;color:var(--text2);text-align:center;padding:0 16px 4px;" data-target="${game.auto_selection_at}"></div>`;
+    }
+    ownerCtrl = `${countdownHtml}<div style="padding:4px 16px 8px;display:flex;gap:4px;">
       ${game.algorithm==='random'&&!game.selection_done ? `<button class="btn-primary btn-sm" style="flex:1;font-size:11px;" onclick="runSelection(${game.id})">⚡ Set Now</button>` : ''}
       <button class="btn-secondary btn-sm" style="font-size:11px;" onclick="closeGame(${game.id})">Close</button></div>`;
   }
