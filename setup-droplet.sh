@@ -178,11 +178,11 @@ HOOPS_DEMO_MODE=0
 HOOPS_DB_PATH=$DATA_DIR/hoops.db
 HOOPS_ALLOWED_ORIGINS=$ALLOWED_ORIGINS
 
-# ── Email (Gmail SMTP) ──
-# Generate an App Password at: https://myaccount.google.com/apppasswords
-GMAIL_ADDRESS=
-GMAIL_APP_PASSWORD=
-GMAIL_FROM_NAME=🏀 Hoops
+# ── Email (SendGrid API) ──
+# Get API key at: https://app.sendgrid.com/settings/api_keys
+SENDGRID_API_KEY=
+SENDGRID_FROM_EMAIL=hoops@goatcommish.com
+SENDGRID_FROM_NAME=🏀 Hoops
 
 # ── SMS (Twilio) ──
 # Get credentials at: https://www.twilio.com/console

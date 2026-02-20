@@ -8,3 +8,4 @@ aiosqlite>=0.20.0
 pydantic>=2.0
 openpyxl>=3.1.0
 twilio>=9.0.0
+sendgrid>=6.11.0
