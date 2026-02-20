@@ -6,6 +6,7 @@ import logging
 import csv
 import io
 import os
+import asyncio
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 
@@ -72,6 +73,25 @@ ALLOWED_ORIGINS = os.environ.get(
     "HOOPS_ALLOWED_ORIGINS",
     "http://localhost:3000,http://localhost:5173,http://localhost:8000"
 ).split(",")
+
+
+# ── Background notification helper ───────────────────────────
+async def _bg_notify(coro_fn, *args):
+    """Run a notification function in the background with its own DB connection.
+    This prevents SMTP calls from blocking API responses."""
+    try:
+        db = await get_db()
+        try:
+            await coro_fn(db, *args)
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.error(f"Background notification error: {e}")
+
+
+def bg_notify(coro_fn, *args):
+    """Fire-and-forget a notification task."""
+    asyncio.create_task(_bg_notify(coro_fn, *args))
 
 
 # ── Lifespan ──────────────────────────────────────────────────
@@ -312,7 +332,7 @@ async def register(req: PlayerCreate, request: Request):
 
         notify_setting = await get_setting(db, "notify_owner_new_signup")
         if notify_setting == "1":
-            await notify_owners_new_signup(db, name, email)
+            bg_notify(notify_owners_new_signup, name, email)
 
         cursor = await db.execute("SELECT * FROM players WHERE id = ?", (player_id,))
         return player_from_row(await cursor.fetchone())
@@ -746,12 +766,20 @@ async def create_game(req: GameCreate, owner_id: int = Depends(require_owner)):
             )
         await db.commit()
 
-        # Schedule notifications via the background worker
-        await schedule_game_notifications(game_id, req.notify_future_at)
+        # Schedule notifications in background (don't block the response)
+        asyncio.create_task(_schedule_game_notifications_bg(game_id, req.notify_future_at))
 
         return await _get_game_out(db, game_id)
     finally:
         await db.close()
+
+
+async def _schedule_game_notifications_bg(game_id, notify_future_at):
+    """Background wrapper so notification failures don't crash the response."""
+    try:
+        await schedule_game_notifications(game_id, notify_future_at)
+    except Exception as e:
+        logger.error(f"Background notification error for game {game_id}: {e}")
 
 
 @app.post("/api/games/{game_id}/signup")
@@ -855,7 +883,7 @@ async def drop_from_game(
                     (waitlisted["id"],),
                 )
                 promoted_player = waitlisted["player_name"]
-                await notify_waitlist_promotion(db, game_id, waitlisted["player_id"])
+                bg_notify(notify_waitlist_promotion, game_id, waitlisted["player_id"])
 
         await db.commit()
 
@@ -871,7 +899,7 @@ async def drop_from_game(
         if elapsed > 60 and (game["algorithm"] == "first_come" or game["selection_done"]):
             player = await get_player_or_404(db, player_id)
             drop_time = datetime.now(timezone.utc).strftime("%I:%M %p")
-            await notify_owner_player_drop(db, game_id, player["name"], drop_time)
+            bg_notify(notify_owner_player_drop, game_id, player["name"], drop_time)
 
         result = {"message": "Removed from the game."}
         if promoted_player:
