@@ -393,39 +393,65 @@ async def notify_waitlist_promotion(
 async def notify_owner_player_drop(
     db: aiosqlite.Connection,
     game_id: int,
-    player_name: str,
-    drop_time: str,
+    player_id: int,
 ):
-    """Notify organizers that a player dropped from a game."""
+    """Notify organizers of the game's group that a player dropped."""
+    # Get game info
+    cursor = await db.execute("SELECT group_id, date, location FROM games WHERE id=?", (game_id,))
+    game = await cursor.fetchone()
+    if not game: return
+    # Get dropped player name
+    cursor = await db.execute("SELECT name FROM players WHERE id=?", (player_id,))
+    prow = await cursor.fetchone()
+    if not prow: return
+    player_name = prow["name"]
+    drop_time = datetime.now(timezone.utc).strftime("%I:%M %p UTC")
+    nice_date, weekday, _ = _format_game_date(game["date"])
+    # Get group organizers
     cursor = await db.execute(
-        "SELECT id, notif_pref FROM players WHERE role = 'owner' AND status = 'approved'"
-    )
-    owners = await cursor.fetchall()
-    for owner in owners:
+        """SELECT p.id, p.notif_pref FROM group_members gm
+           JOIN players p ON p.id=gm.player_id
+           WHERE gm.group_id=? AND gm.role='organizer' AND gm.status='active'""",
+        (game["group_id"],))
+    for owner in await cursor.fetchall():
         await send_notification(
             db, owner["id"], owner["notif_pref"],
-            "⚠️ Player Drop",
-            f"{player_name} dropped from game #{game_id} at {drop_time}.",
+            f"⚠️ Player Drop — {weekday}",
+            f"{player_name} dropped from the {weekday} game at {game['location']}.\n\n"
+            f"🕐 {weekday}, {nice_date}\n\n"
+            f"Open the app to manage: https://www.goatcommish.com",
         )
 
 
 async def notify_owners_new_signup(
     db: aiosqlite.Connection,
-    player_name: str,
-    player_email: str,
+    game_id: int,
+    signup_player_id: int,
 ):
-    """Notify organizers about a new player registration."""
+    """Notify organizers of the game's group about a new signup."""
+    # Get game's group
+    cursor = await db.execute("SELECT group_id, date, location FROM games WHERE id=?", (game_id,))
+    game = await cursor.fetchone()
+    if not game: return
+    # Get signup player info
+    cursor = await db.execute("SELECT name FROM players WHERE id=?", (signup_player_id,))
+    prow = await cursor.fetchone()
+    if not prow: return
+    player_name = prow["name"]
+    nice_date, weekday, _ = _format_game_date(game["date"])
+    # Get group organizers
     cursor = await db.execute(
-        "SELECT id, notif_pref FROM players WHERE role = 'owner' AND status = 'approved'"
-    )
-    owners = await cursor.fetchall()
-    for owner in owners:
+        """SELECT p.id, p.notif_pref FROM group_members gm
+           JOIN players p ON p.id=gm.player_id
+           WHERE gm.group_id=? AND gm.role='organizer' AND gm.status='active'""",
+        (game["group_id"],))
+    for owner in await cursor.fetchall():
         await send_notification(
             db, owner["id"], owner["notif_pref"],
-            "👤 New Player Signup",
-            f"{player_name} ({player_email}) has registered and needs approval.\n\n"
-            f"Open the app to review and approve:\n"
-            f"https://www.goatcommish.com",
+            f"👤 New Signup — {weekday}",
+            f"{player_name} signed up for the {weekday} game at {game['location']}.\n\n"
+            f"🕐 {weekday}, {nice_date}\n\n"
+            f"Open the app to manage: https://www.goatcommish.com",
         )
 
 
@@ -460,13 +486,28 @@ async def notify_game_cancelled(
 async def notify_game_edited(
     db: aiosqlite.Connection,
     game_id: int,
-    player_ids: list[int],
-    changes: str,
+    old_date: str,
+    old_location: str,
     new_date: str,
     new_location: str,
 ):
-    """Notify players that a game has been updated."""
+    """Notify signed-up players that a game has been updated."""
     nice_date, weekday, time_str = _format_game_date(new_date)
+
+    # Build changes description
+    changes = []
+    if old_date != new_date:
+        old_nice, _, _ = _format_game_date(old_date)
+        changes.append(f"📅 Date/time changed to: {nice_date}")
+    if old_location != new_location:
+        changes.append(f"📍 Location changed to: {new_location}")
+    changes_str = "\n".join(changes)
+
+    # Get all signed-up players
+    cursor = await db.execute(
+        "SELECT player_id FROM game_signups WHERE game_id=?", (game_id,))
+    player_ids = [r["player_id"] for r in await cursor.fetchall()]
+
     subject = f"📝 Game Updated — {weekday}"
 
     for pid in player_ids:
@@ -479,7 +520,7 @@ async def notify_game_edited(
         notif_pref = row["notif_pref"]
         body = (
             f"A game you signed up for has been updated.\n\n"
-            f"{changes}\n\n"
+            f"{changes_str}\n\n"
             f"📍 {new_location}\n"
             f"🕐 {nice_date}\n\n"
             f"Open the app to review:\n"
@@ -506,3 +547,36 @@ def log_notification_config():
         logger.info("   Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL to enable email")
     if not sms_ok:
         logger.info("   Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER to enable SMS")
+
+
+async def notify_group_invitation(
+    db: aiosqlite.Connection,
+    group_id: int,
+    target_player_id: int,
+    inviter_id: int,
+    token: str,
+):
+    """Notify a player that they've been invited to a group."""
+    cursor = await db.execute("SELECT name FROM groups WHERE id=?", (group_id,))
+    grow = await cursor.fetchone()
+    if not grow: return
+    group_name = grow["name"]
+    cursor = await db.execute("SELECT name FROM players WHERE id=?", (inviter_id,))
+    irow = await cursor.fetchone()
+    inviter_name = irow["name"] if irow else "An organizer"
+    cursor = await db.execute("SELECT notif_pref FROM players WHERE id=?", (target_player_id,))
+    prow = await cursor.fetchone()
+    if not prow: return
+
+    base_url = os.environ.get("HOOPS_BASE_URL", "https://www.goatcommish.com")
+    accept_url = f"{base_url}/api/invitations/{token}/accept-public"
+    decline_url = f"{base_url}/api/invitations/{token}/decline-public"
+
+    subject = f"🏀 You're invited to join {group_name}!"
+    body = (
+        f"{inviter_name} has invited you to join the pickup basketball group '{group_name}' on GOATcommish.\n\n"
+        f"Accept: {accept_url}\n"
+        f"Decline: {decline_url}\n\n"
+        f"Or open the app to respond: {base_url}"
+    )
+    await send_notification(db, target_player_id, prow["notif_pref"], subject, body)

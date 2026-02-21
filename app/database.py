@@ -1,16 +1,14 @@
 """
-Database setup and initialization for the Hoops pickup basketball app.
-Uses aiosqlite for async SQLite access.
+Database setup for GOATcommish — multi-group pickup basketball.
 """
-import aiosqlite
-import os
+import aiosqlite, os, logging
 from datetime import datetime, timezone, timedelta
 
+logger = logging.getLogger("hoops.db")
 DB_PATH = os.environ.get("HOOPS_DB_PATH", "hoops.db")
 
 SCHEMA = """
--- ── Core Tables ──────────────────────────────────────────────
-
+-- ── Global player accounts ──────────────────────────────────
 CREATE TABLE IF NOT EXISTS players (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -18,28 +16,64 @@ CREATE TABLE IF NOT EXISTS players (
     mobile TEXT DEFAULT '',
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'player' CHECK(role IN ('owner','player')),
-    priority TEXT NOT NULL DEFAULT 'standard' CHECK(priority IN ('high','standard','low')),
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied')),
+    priority TEXT NOT NULL DEFAULT 'standard',
+    status TEXT NOT NULL DEFAULT 'approved' CHECK(status IN ('pending','approved','denied')),
     notif_pref TEXT NOT NULL DEFAULT 'email',
     force_password_change INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+-- ── Groups ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    created_by INTEGER REFERENCES players(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS group_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'player' CHECK(role IN ('organizer','player')),
+    priority TEXT NOT NULL DEFAULT 'standard' CHECK(priority IN ('high','standard','low')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('active','pending','invited','declined')),
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(group_id, player_id)
+);
+
+CREATE TABLE IF NOT EXISTS group_invitations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    invited_by INTEGER NOT NULL REFERENCES players(id),
+    token TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','declined')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ── Per-group settings ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS group_settings (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    UNIQUE(key, group_id)
+);
+
+-- ── Per-group locations ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
     address TEXT DEFAULT '',
-    sort_order INTEGER DEFAULT 0
+    sort_order INTEGER DEFAULT 0,
+    group_id INTEGER NOT NULL DEFAULT 0
 );
 
+-- ── Games (per-group) ───────────────────────────────────────
 CREATE TABLE IF NOT EXISTS games (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL DEFAULT 0,
     date TEXT NOT NULL,
     location TEXT NOT NULL,
     algorithm TEXT NOT NULL DEFAULT 'first_come'
@@ -65,8 +99,7 @@ CREATE TABLE IF NOT EXISTS game_signups (
     game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
     signed_up_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK(status IN ('in','waitlist','pending')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('in','waitlist','pending')),
     owner_added INTEGER DEFAULT 0,
     UNIQUE(game_id, player_id)
 );
@@ -75,95 +108,65 @@ CREATE TABLE IF NOT EXISTS game_notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-    notification_type TEXT NOT NULL,
-    channel TEXT NOT NULL,
-    message TEXT NOT NULL,
-    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    notification_type TEXT NOT NULL, channel TEXT NOT NULL,
+    message TEXT NOT NULL, sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     delivered INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS notification_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    recipient_id INTEGER NOT NULL,
-    channel TEXT NOT NULL,
-    subject TEXT,
-    body TEXT NOT NULL,
-    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    recipient_id INTEGER NOT NULL, channel TEXT NOT NULL,
+    subject TEXT, body TEXT NOT NULL, sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ── Security Tables ──────────────────────────────────────────
-
+-- ── Security ────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS login_attempts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL COLLATE NOCASE,
-    ip_address TEXT NOT NULL DEFAULT '',
-    success INTEGER NOT NULL DEFAULT 0,
-    attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    email TEXT NOT NULL COLLATE NOCASE, ip_address TEXT NOT NULL DEFAULT '',
+    success INTEGER NOT NULL DEFAULT 0, attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_login_attempts_email_time
-    ON login_attempts(email, attempted_at);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_email_time ON login_attempts(email, attempted_at);
 
 CREATE TABLE IF NOT EXISTS token_blacklist (
-    jti TEXT PRIMARY KEY,
-    player_id INTEGER NOT NULL,
-    blacklisted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL
+    jti TEXT PRIMARY KEY, player_id INTEGER NOT NULL,
+    blacklisted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, expires_at TIMESTAMP NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_token_blacklist_expires
-    ON token_blacklist(expires_at);
-
--- ── Scheduler State ──────────────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_token_blacklist_expires ON token_blacklist(expires_at);
 
 CREATE TABLE IF NOT EXISTS scheduler_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-    job_type TEXT NOT NULL
-        CHECK(job_type IN ('notify_high','notify_standard','notify_low','run_selection')),
-    scheduled_at TEXT NOT NULL,       -- ISO datetime when job should execute
-    executed_at TEXT,                  -- ISO datetime when job actually ran
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK(status IN ('pending','running','completed','failed')),
-    error_message TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    job_type TEXT NOT NULL CHECK(job_type IN ('notify_high','notify_standard','notify_low','run_selection')),
+    scheduled_at TEXT NOT NULL, executed_at TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed')),
+    error_message TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(game_id, job_type)
 );
-CREATE INDEX IF NOT EXISTS idx_scheduler_pending
-    ON scheduler_jobs(status, scheduled_at);
-
--- ── Password Reset Tokens ───────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_scheduler_pending ON scheduler_jobs(status, scheduled_at);
 
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-    token TEXT NOT NULL UNIQUE,
-    expires_at TEXT NOT NULL,
-    used INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    token TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ── Legacy settings table (kept for migration, replaced by group_settings) ──
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
 DEFAULT_SETTINGS = {
-    "default_cap": "12",
-    "cap_enabled": "1",
-    "default_algorithm": "first_come",
-    "default_location": "",
-    "high_priority_delay_minutes": "60",
-    "alternative_delay_minutes": "1440",
-    "random_wait_period_minutes": "60",
+    "default_cap": "12", "cap_enabled": "1", "default_algorithm": "first_come",
+    "default_location": "", "high_priority_delay_minutes": "60",
+    "alternative_delay_minutes": "1440", "random_wait_period_minutes": "60",
     "notify_owner_new_signup": "1",
 }
 
-DEFAULT_LOCATIONS = [
-    "Central Park Courts",
-    "YMCA Gym",
-    "LA Fitness",
-    "Community Center",
-    "Outdoor Courts @ 5th",
-]
-
 
 async def get_db() -> aiosqlite.Connection:
-    """Get a database connection with row factory and security pragmas."""
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
@@ -173,87 +176,100 @@ async def get_db() -> aiosqlite.Connection:
 
 
 async def init_db():
-    """Initialize the database schema and seed data."""
     db = await get_db()
     try:
         await db.executescript(SCHEMA)
-
-        # ── Migrations for existing databases ──
-        # Players: force_password_change
-        cursor = await db.execute("PRAGMA table_info(players)")
-        pcols = {row["name"] for row in await cursor.fetchall()}
-        if "force_password_change" not in pcols:
-            await db.execute("ALTER TABLE players ADD COLUMN force_password_change INTEGER DEFAULT 0")
-
-        # Locations: address, sort_order
-        cursor = await db.execute("PRAGMA table_info(locations)")
-        lcols = {row["name"] for row in await cursor.fetchall()}
-        if "address" not in lcols:
-            await db.execute("ALTER TABLE locations ADD COLUMN address TEXT DEFAULT ''")
-        if "sort_order" not in lcols:
-            await db.execute("ALTER TABLE locations ADD COLUMN sort_order INTEGER DEFAULT 0")
-
-        # Games: batch_id
-        cursor = await db.execute("PRAGMA table_info(games)")
-        gcols = {row["name"] for row in await cursor.fetchall()}
-        if "batch_id" not in gcols:
-            await db.execute("ALTER TABLE games ADD COLUMN batch_id TEXT")
-        if "random_high_auto" not in gcols:
-            await db.execute("ALTER TABLE games ADD COLUMN random_high_auto INTEGER DEFAULT 1")
-
-        # Migrate notif_pref 'push' → 'email' for existing players
-        await db.execute("UPDATE players SET notif_pref = 'email' WHERE notif_pref = 'push'")
-
-        # Ensure default_location setting exists
-        cursor = await db.execute("SELECT 1 FROM settings WHERE key = 'default_location'")
-        if not await cursor.fetchone():
-            await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('default_location', '')")
-
-        cursor = await db.execute("SELECT COUNT(*) as c FROM settings")
-        row = await cursor.fetchone()
-        if row["c"] == 0:
-            for key, value in DEFAULT_SETTINGS.items():
-                await db.execute(
-                    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-                    (key, value),
-                )
-
-        cursor = await db.execute("SELECT COUNT(*) as c FROM locations")
-        row = await cursor.fetchone()
-        if row["c"] == 0:
-            for i, loc in enumerate(DEFAULT_LOCATIONS):
-                await db.execute(
-                    "INSERT OR IGNORE INTO locations (name, sort_order) VALUES (?, ?)",
-                    (loc, i),
-                )
-
+        await _run_migrations(db)
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_setting(db: aiosqlite.Connection, key: str) -> str | None:
-    cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
-    row = await cursor.fetchone()
-    return row["value"] if row else None
+async def _run_migrations(db):
+    """Migrate legacy pre-groups DB to groups model."""
+    # Add columns that may be missing from older DBs
+    for tbl, col, defn in [
+        ("players", "force_password_change", "INTEGER DEFAULT 0"),
+        ("games", "group_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("games", "random_high_auto", "INTEGER DEFAULT 1"),
+        ("games", "batch_id", "TEXT"),
+        ("locations", "group_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("locations", "address", "TEXT DEFAULT ''"),
+        ("locations", "sort_order", "INTEGER DEFAULT 0"),
+    ]:
+        cursor = await db.execute(f"PRAGMA table_info({tbl})")
+        cols = {r["name"] for r in await cursor.fetchall()}
+        if col not in cols:
+            await db.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {defn}")
+
+    # Migrate push -> email
+    await db.execute("UPDATE players SET notif_pref='email' WHERE notif_pref='push'")
+
+    # Check if groups exist already
+    cursor = await db.execute("SELECT COUNT(*) as c FROM groups")
+    if (await cursor.fetchone())["c"] > 0:
+        return  # Already migrated
+
+    # Create default "friedland" group
+    await db.execute("INSERT OR IGNORE INTO groups (name) VALUES ('friedland')")
+    cursor = await db.execute("SELECT id FROM groups WHERE name='friedland'")
+    gid = (await cursor.fetchone())["id"]
+
+    # Migrate existing players to friedland
+    cursor = await db.execute("SELECT id, role, priority, status FROM players")
+    for p in await cursor.fetchall():
+        gm_role = "organizer" if p["role"] == "owner" else "player"
+        gm_status = "active" if p["status"] == "approved" else "pending"
+        await db.execute(
+            "INSERT OR IGNORE INTO group_members (group_id,player_id,role,priority,status) VALUES (?,?,?,?,?)",
+            (gid, p["id"], gm_role, p["priority"] or "standard", gm_status))
+
+    # Migrate games, locations to friedland
+    await db.execute("UPDATE games SET group_id=? WHERE group_id=0", (gid,))
+    await db.execute("UPDATE locations SET group_id=? WHERE group_id=0", (gid,))
+
+    # Migrate old settings table to group_settings
+    cursor = await db.execute("SELECT key, value FROM settings")
+    for row in await cursor.fetchall():
+        await db.execute(
+            "INSERT OR IGNORE INTO group_settings (key,value,group_id) VALUES (?,?,?)",
+            (row["key"], row["value"], gid))
+
+    # Ensure defaults
+    await ensure_group_settings(db, gid)
+    await db.commit()
+    logger.info(f"✅ Migrated existing data to 'friedland' group (id={gid})")
 
 
-async def set_setting(db: aiosqlite.Connection, key: str, value: str):
-    await db.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
-    )
+async def ensure_group_settings(db, group_id: int):
+    for key, value in DEFAULT_SETTINGS.items():
+        await db.execute(
+            "INSERT OR IGNORE INTO group_settings (key,value,group_id) VALUES (?,?,?)",
+            (key, value, group_id))
     await db.commit()
 
 
-async def cleanup_expired_tokens(db: aiosqlite.Connection):
-    """Remove expired entries from the token blacklist."""
+async def get_setting(db, key, group_id):
+    cursor = await db.execute(
+        "SELECT value FROM group_settings WHERE key=? AND group_id=?", (key, group_id))
+    row = await cursor.fetchone()
+    return row["value"] if row else DEFAULT_SETTINGS.get(key)
+
+
+async def set_setting(db, key, value, group_id):
+    await db.execute(
+        "INSERT OR REPLACE INTO group_settings (key,value,group_id) VALUES (?,?,?)",
+        (key, value, group_id))
+    await db.commit()
+
+
+async def cleanup_expired_tokens(db):
     now = datetime.now(timezone.utc).isoformat()
     await db.execute("DELETE FROM token_blacklist WHERE expires_at < ?", (now,))
     await db.commit()
 
 
-async def cleanup_old_login_attempts(db: aiosqlite.Connection, days: int = 7):
-    """Remove login attempts older than N days."""
+async def cleanup_old_login_attempts(db, days=7):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     await db.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (cutoff,))
     await db.commit()

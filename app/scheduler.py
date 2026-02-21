@@ -227,21 +227,25 @@ class Scheduler:
         self, db, game_id: int, priority: str, game: dict
     ):
         """
-        Send signup-open notifications to all approved players of a given
+        Send signup-open notifications to group members of a given
         priority tier who haven't already been notified for this game.
         If random_high_auto is True and this is a random game notifying high
         priority, also auto-sign them up (guaranteed spot).
         """
-        # Get players of this priority who haven't been notified
+        group_id = game.get("group_id", 0)
+        # Get group members of this priority who haven't been notified
         cursor = await db.execute(
-            """SELECT p.id FROM players p
-               WHERE p.status = 'approved'
-                 AND p.priority = ?
-                 AND p.id NOT IN (
+            """SELECT gm.player_id as id FROM group_members gm
+               JOIN players p ON p.id = gm.player_id
+               WHERE gm.group_id = ?
+                 AND gm.status = 'active'
+                 AND gm.priority = ?
+                 AND p.status = 'approved'
+                 AND gm.player_id NOT IN (
                      SELECT gn.player_id FROM game_notifications gn
                      WHERE gn.game_id = ? AND gn.notification_type = 'signup_open'
                  )""",
-            (priority, game_id),
+            (group_id, priority, game_id),
         )
         players = [row["id"] for row in await cursor.fetchall()]
 
@@ -300,9 +304,18 @@ class Scheduler:
         if start.tzinfo is None:
             start = start.replace(tzinfo=timezone.utc)
 
-        hp_delay = int(await get_setting(db, "high_priority_delay_minutes") or 60)
-        alt_delay = int(await get_setting(db, "alternative_delay_minutes") or 1440)
-        rand_wait = int(await get_setting(db, "random_wait_period_minutes") or 60)
+        # Get the game's group_id for group-scoped settings
+        cursor = await db.execute(
+            "SELECT group_id, algorithm FROM games WHERE id = ?", (game_id,)
+        )
+        game = await cursor.fetchone()
+        if not game:
+            return
+        group_id = game["group_id"]
+
+        hp_delay = int(await get_setting(db, "high_priority_delay_minutes", group_id) or 60)
+        alt_delay = int(await get_setting(db, "alternative_delay_minutes", group_id) or 1440)
+        rand_wait = int(await get_setting(db, "random_wait_period_minutes", group_id) or 60)
 
         standard_time = start + timedelta(minutes=hp_delay)
         low_time = standard_time + timedelta(minutes=alt_delay)
@@ -324,11 +337,7 @@ class Scheduler:
         )
 
         # For random algorithm, schedule auto-selection
-        cursor = await db.execute(
-            "SELECT algorithm FROM games WHERE id = ?", (game_id,)
-        )
-        game = await cursor.fetchone()
-        if game and game["algorithm"] == "random":
+        if game["algorithm"] == "random":
             selection_time = standard_time + timedelta(minutes=rand_wait)
             await db.execute(
                 """INSERT OR IGNORE INTO scheduler_jobs
@@ -391,10 +400,14 @@ async def schedule_game_notifications(game_id: int, notify_at: str | None):
             )
             await db.commit()
 
-            # Send high-priority notifications
+            # Send high-priority notifications (group-scoped)
+            group_id = g.get("group_id", 0)
             cursor2 = await db.execute(
-                """SELECT id FROM players
-                   WHERE status = 'approved' AND priority = 'high'"""
+                """SELECT gm.player_id as id FROM group_members gm
+                   JOIN players p ON p.id = gm.player_id
+                   WHERE gm.group_id = ? AND gm.status = 'active'
+                     AND gm.priority = 'high' AND p.status = 'approved'""",
+                (group_id,)
             )
             high_players = [r["id"] for r in await cursor2.fetchall()]
             if high_players:

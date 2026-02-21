@@ -30,14 +30,17 @@ async def run_random_selection(db: aiosqlite.Connection, game_id: int):
     cap = game["cap"] if game["cap_enabled"] else 999999
     available = cap
     high_auto = game["random_high_auto"]
+    group_id = game["group_id"]
 
     cursor = await db.execute(
-        """SELECT gs.id, gs.player_id, gs.owner_added, p.priority
+        """SELECT gs.id, gs.player_id, gs.owner_added,
+                  COALESCE(gm.priority, 'standard') as priority
            FROM game_signups gs
            JOIN players p ON p.id = gs.player_id
+           LEFT JOIN group_members gm ON gm.player_id = gs.player_id AND gm.group_id = ?
            WHERE gs.game_id = ?
            ORDER BY gs.signed_up_at ASC""",
-        (game_id,),
+        (group_id, game_id),
     )
     signups = await cursor.fetchall()
 
