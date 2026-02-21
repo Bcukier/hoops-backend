@@ -1283,6 +1283,9 @@ async def health():
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 if STATIC_DIR.exists():
+    # Serve static assets at /static/
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
     # Serve the SPA for any non-API route
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
