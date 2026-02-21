@@ -1318,7 +1318,7 @@ async function invitePlayer() {
   try {
     const r = await api(`/groups/${gid}/invite`,{method:'POST',body:JSON.stringify({name,email,mobile})});
     showToast(r.message,'success');
-    if(r.temp_password) showToast(`Temp password: ${r.temp_password}`,'info');
+    showToast(r.message,'success');
     await fetchPlayers(); render();
   } catch(e) { showToast(e.message,'error'); }
 }
@@ -1343,7 +1343,6 @@ async function importCSV() {
     if(data.invited) msg.push(`${data.invited} invited`);
     if(data.skipped) msg.push(`${data.skipped} skipped`);
     showToast(msg.join(', ') || 'Import complete', 'success');
-    if(data.temp_passwords?.length) console.log('Temp passwords:', data.temp_passwords);
     await fetchPlayers(); render();
   } catch(e) { showToast(e.message,'error'); }
 }

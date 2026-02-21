@@ -654,7 +654,7 @@ async def invite_to_group(group_id: int, req: PlayerCreate, player_id: int = Dep
             return {"message": f"Invitation sent to {name}", "player_id": target_pid}
         else:
             # New player — auto-create account and add to group
-            pw = secrets.token_urlsafe(8)
+            pw = email.strip().lower()
             pw_hash = hash_password(pw)
             mobile = sanitize_string(req.mobile) if req.mobile else ""
             await db.execute(
@@ -668,7 +668,7 @@ async def invite_to_group(group_id: int, req: PlayerCreate, player_id: int = Dep
                 "INSERT INTO group_members (group_id,player_id,role,priority,status) VALUES (?,?,'player','standard','active')",
                 (group_id, target_pid))
             await db.commit()
-            return {"message": f"{name} added to group (new account created)", "player_id": target_pid, "temp_password": pw}
+            return {"message": f"{name} added to group (new account created, password is their email)", "player_id": target_pid}
     finally:
         await db.close()
 
@@ -793,7 +793,6 @@ async def import_players_csv(group_id: int, file: UploadFile = File(...),
         content = (await file.read()).decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(content))
         added, skipped, invited = 0, 0, 0
-        temp_passwords = []
         for row in reader:
             name = sanitize_string(row.get("name","").strip())
             email = row.get("email","").strip().lower()
@@ -819,7 +818,7 @@ async def import_players_csv(group_id: int, file: UploadFile = File(...),
                     (group_id, pid, player_id, token))
                 invited += 1
             else:
-                pw = secrets.token_urlsafe(8)
+                pw = email.strip().lower()
                 pw_hash = hash_password(pw)
                 await db.execute(
                     """INSERT INTO players (name,email,mobile,password_hash,role,priority,status,notif_pref,force_password_change)
@@ -832,9 +831,8 @@ async def import_players_csv(group_id: int, file: UploadFile = File(...),
                     "INSERT INTO group_members (group_id,player_id,role,priority,status) VALUES (?,?,'player','standard','active')",
                     (group_id, pid))
                 added += 1
-                temp_passwords.append({"name": name, "email": email, "password": pw})
         await db.commit()
-        return {"added": added, "invited": invited, "skipped": skipped, "temp_passwords": temp_passwords}
+        return {"added": added, "invited": invited, "skipped": skipped}
     finally:
         await db.close()
 
