@@ -275,6 +275,7 @@ function render() {
     case 'player_settings': content = renderPlayerSettings(); break;
     case 'owner_settings': content = renderOwnerSettings(); break;
     case 'player_mgmt': content = renderPlayerMgmt(); break;
+    case 'algorithm_info': content = renderAlgorithmInfo(); break;
     default: content = renderGames();
   }
   app.innerHTML = nav + `<main style="max-width:1200px;margin:0 auto;padding:20px;">${content}</main>`;
@@ -727,9 +728,16 @@ function renderCreateGame() {
         <button class="btn-secondary btn-sm" onclick="addGameSlot()">+ Add Another Game</button>
         <span id="cg-slot-count" style="font-size:13px;color:var(--text2);align-self:center;"></span>
       </div>
-      <div><label>Algorithm</label><select id="cg-algorithm">
+      <div><label>Algorithm <span style="cursor:pointer;color:var(--orange);font-size:16px;vertical-align:middle;" onclick="navigate('algorithm_info')" title="Learn about algorithms">ℹ️</span></label><select id="cg-algorithm" onchange="toggleRandomOpts()">
         <option value="first_come" ${defAlg==='first_come'?'selected':''}>First Come, First Served</option>
         <option value="random" ${defAlg==='random'?'selected':''}>Random Selection</option></select></div>
+      <div id="cg-random-opts" style="display:${defAlg==='random'?'block':'none'};padding:8px 14px;background:var(--surface2);border-radius:8px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="cg-high-auto" checked><span class="slider"></span></label>
+          <div><span style="font-size:14px;">Auto-add high priority players</span>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px;">When on, high priority players are automatically signed up and guaranteed a spot. When off, they're just notified first.</div></div>
+        </div>
+      </div>
       <div style="display:flex;align-items:center;gap:12px;">
         <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="cg-cap-on" ${defCapOn?'checked':''} onchange="toggleCapInput()"><span class="slider"></span></label>
         <span style="font-size:14px;">Player Cap</span>
@@ -788,12 +796,19 @@ function toggleOtherLoc(el) {
   if (otherInput) otherInput.style.display = el.value === 'other' ? 'block' : 'none';
 }
 function toggleCapInput() { const on=document.getElementById('cg-cap-on').checked; document.getElementById('cg-cap').style.opacity=on?'1':'0.4'; }
+function toggleRandomOpts() {
+  const alg = document.getElementById('cg-algorithm').value;
+  const opts = document.getElementById('cg-random-opts');
+  if (opts) opts.style.display = alg === 'random' ? 'block' : 'none';
+}
 
 async function createGame() {
   const slots = document.querySelectorAll('.cg-slot');
   const algorithm = document.getElementById('cg-algorithm').value;
   const capEnabled = document.getElementById('cg-cap-on').checked;
   const cap = parseInt(document.getElementById('cg-cap').value)||12;
+  const highAutoEl = document.getElementById('cg-high-auto');
+  const randomHighAuto = highAutoEl ? highAutoEl.checked : true;
   const ownerAdded = [...document.querySelectorAll('.owner-add-player:checked')].map(cb=>parseInt(cb.value)).filter(n=>!isNaN(n));
   let notify_future_at = null;
   if (document.getElementById('cg-delay-notif').checked) {
@@ -810,7 +825,7 @@ async function createGame() {
     if (isNaN(new Date(gameDate).getTime())) { showToast('Invalid date/time','error'); return; }
     let location = slot.querySelector('.cg-location').value;
     if(location==='other') location = slot.querySelector('.cg-other-loc').value || 'TBD';
-    games.push({ date:gameDate, location, algorithm, cap, cap_enabled:capEnabled, owner_added_player_ids:ownerAdded, notify_future_at });
+    games.push({ date:gameDate, location, algorithm, cap, cap_enabled:capEnabled, owner_added_player_ids:ownerAdded, notify_future_at, random_high_auto:randomHighAuto });
   }
 
   const btn=document.getElementById('cg-btn'); btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
@@ -1140,6 +1155,81 @@ async function importCSV() {
     if(data.errors.length) console.warn('Import errors:', data.errors);
     await fetchPlayers(); render();
   } catch(e) { showToast(e.message,'error'); }
+}
+
+// ═══ ALGORITHM INFO ══════════════════════════════════════════
+function renderAlgorithmInfo() {
+  return `<div class="fade-in" style="max-width:700px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+      <button class="btn-secondary btn-sm" onclick="navigate('create_game')">← Back</button>
+      <h2 style="font-weight:800;font-size:24px;">How Algorithms Work</h2>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <h3 style="font-size:18px;font-weight:700;color:var(--orange);margin-bottom:12px;">🏃 First Come, First Served</h3>
+      <p style="color:var(--text2);line-height:1.7;font-size:14px;">
+        Players are added to the game in the order they sign up. The first players to respond get spots. Once the game is full, any additional signups are placed on a waitlist in the order they signed up.
+      </p>
+      <div class="card" style="margin-top:12px;background:var(--bg);padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">How the notification cascade works:</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.8;">
+          1. <strong style="color:var(--green);">High priority</strong> players are notified first<br>
+          2. After a delay, <strong style="color:var(--blue);">Standard priority</strong> players are notified<br>
+          3. After another delay, <strong style="color:var(--grey);">Low priority</strong> players are notified<br>
+          4. Players can sign up as soon as they're notified — first come, first served
+        </div>
+      </div>
+      <p style="color:var(--text2);line-height:1.7;font-size:14px;margin-top:12px;">
+        This gives high-priority players a head start, but doesn't guarantee them a spot. If they're slow, a standard-priority player who signs up quickly could take the last spot.
+      </p>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <h3 style="font-size:18px;font-weight:700;color:var(--orange);margin-bottom:12px;">🎲 Random Selection</h3>
+      <p style="color:var(--text2);line-height:1.7;font-size:14px;">
+        All players sign up during a waiting period. Once the waiting period ends, players are selected randomly to fill the available spots. The remaining players are placed on a waitlist in random order.
+      </p>
+
+      <div class="card" style="margin-top:12px;background:var(--bg);padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">High priority — two modes:</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.8;">
+          <strong style="color:var(--green);">Auto-add (default):</strong> High priority players are automatically signed up and guaranteed a spot in the game. They don't need to take any action — they're in unless they choose to drop.<br><br>
+          <strong style="color:var(--blue);">Notify first only:</strong> High priority players are simply notified before others. They must sign up themselves, and during selection, everyone is treated equally in the random draw — no guaranteed spots.
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px;background:var(--bg);padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Selection order:</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.8;">
+          1. <strong>Organizer-added</strong> players are always in (guaranteed)<br>
+          2. If auto-add is on: <strong style="color:var(--green);">High priority</strong> players get guaranteed spots<br>
+          3. Remaining spots filled by <strong>random draw</strong> from all other signups<br>
+          4. Everyone else goes to the waitlist in random order
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:18px;font-weight:700;color:var(--orange);margin-bottom:12px;">⚙️ Priority Tiers</h3>
+      <div style="display:grid;gap:12px;">
+        <div style="display:flex;align-items:start;gap:10px;">
+          <span class="badge badge-green" style="margin-top:2px;">High</span>
+          <span style="font-size:14px;color:var(--text2);">Core players who get first access. In random mode with auto-add, they're guaranteed a spot.</span>
+        </div>
+        <div style="display:flex;align-items:start;gap:10px;">
+          <span class="badge badge-blue" style="margin-top:2px;">Standard</span>
+          <span style="font-size:14px;color:var(--text2);">Regular players. Notified after the high-priority delay.</span>
+        </div>
+        <div style="display:flex;align-items:start;gap:10px;">
+          <span class="badge badge-grey" style="margin-top:2px;">Low</span>
+          <span style="font-size:14px;color:var(--text2);">Subs and alternates. Notified last, and only if spots remain.</span>
+        </div>
+      </div>
+      <p style="color:var(--text2);line-height:1.7;font-size:13px;margin-top:16px;">
+        Notification delays between tiers are configured in <strong>Organizer Settings</strong>. Default is 60 minutes between high and standard, 24 hours between standard and low.
+      </p>
+    </div>
+  </div>`;
 }
 
 // ═══ NAVIGATION & LIFECYCLE ══════════════════════════════════

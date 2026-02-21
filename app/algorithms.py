@@ -13,11 +13,14 @@ async def run_random_selection(db: aiosqlite.Connection, game_id: int):
     """
     Execute the random selection algorithm for a game.
 
-    Priority order:
-    1. Owner-added players → always in
-    2. High priority players → guaranteed if slots remain, random if too many
-    3. Standard/low players → random selection for remaining slots
-    4. Everyone else → waitlist in random order
+    When random_high_auto is True:
+      1. Owner-added players → always in
+      2. High priority players → guaranteed if slots remain
+      3. Standard/low players → random for remaining slots
+
+    When random_high_auto is False:
+      1. Owner-added players → always in
+      2. ALL remaining players → pure random selection
     """
     cursor = await db.execute("SELECT * FROM games WHERE id = ?", (game_id,))
     game = await cursor.fetchone()
@@ -26,6 +29,7 @@ async def run_random_selection(db: aiosqlite.Connection, game_id: int):
 
     cap = game["cap"] if game["cap_enabled"] else 999999
     available = cap
+    high_auto = game["random_high_auto"]
 
     cursor = await db.execute(
         """SELECT gs.id, gs.player_id, gs.owner_added, p.priority
@@ -51,30 +55,34 @@ async def run_random_selection(db: aiosqlite.Connection, game_id: int):
 
     remaining = [s for s in signups if not s["owner_added"]]
 
-    # 2. High priority players
-    high_pri = [s for s in remaining if s["priority"] == "high"]
-    others = [s for s in remaining if s["priority"] != "high"]
+    if high_auto:
+        # 2. High priority players get guaranteed spots
+        high_pri = [s for s in remaining if s["priority"] == "high"]
+        others = [s for s in remaining if s["priority"] != "high"]
 
-    if len(high_pri) <= available:
-        for s in high_pri:
-            await db.execute(
-                "UPDATE game_signups SET status = 'in' WHERE id = ?", (s["id"],)
-            )
-            in_players.append(s["player_id"])
-            available -= 1
-    else:
-        random.shuffle(high_pri)
-        for i, s in enumerate(high_pri):
-            if i < available:
+        if len(high_pri) <= available:
+            for s in high_pri:
                 await db.execute(
                     "UPDATE game_signups SET status = 'in' WHERE id = ?", (s["id"],)
                 )
                 in_players.append(s["player_id"])
-            else:
-                waitlist_players.append(s)
-        available = 0
+                available -= 1
+        else:
+            random.shuffle(high_pri)
+            for i, s in enumerate(high_pri):
+                if i < available:
+                    await db.execute(
+                        "UPDATE game_signups SET status = 'in' WHERE id = ?", (s["id"],)
+                    )
+                    in_players.append(s["player_id"])
+                else:
+                    waitlist_players.append(s)
+            available = 0
+    else:
+        # No priority advantage — all remaining go into random pool
+        others = remaining
 
-    # 3. Standard and low players
+    # 3. Remaining players — pure random
     if available > 0 and others:
         random.shuffle(others)
         for i, s in enumerate(others):

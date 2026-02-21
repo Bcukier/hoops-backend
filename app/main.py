@@ -874,13 +874,14 @@ async def create_game(req: GameCreate, owner_id: int = Depends(require_owner)):
 
         cursor = await db.execute(
             """INSERT INTO games (date, location, algorithm, cap, cap_enabled, created_by,
-                                  notified_at, notify_future_at, phase, selection_done)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  notified_at, notify_future_at, phase, selection_done, random_high_auto)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 req.date, location, req.algorithm, req.cap,
                 1 if req.cap_enabled else 0, owner_id,
                 notified_at, req.notify_future_at, phase,
                 1 if req.algorithm == "first_come" else 0,
+                1 if req.random_high_auto else 0,
             ),
         )
         game_id = cursor.lastrowid
@@ -939,13 +940,14 @@ async def create_batch_games(req: BatchGameCreate, owner_id: int = Depends(requi
             # All batch games start in 'created' phase — they'll be notified together
             cursor = await db.execute(
                 """INSERT INTO games (date, location, algorithm, cap, cap_enabled, created_by,
-                                      phase, selection_done, batch_id)
-                   VALUES (?, ?, ?, ?, ?, ?, 'created', ?, ?)""",
+                                      phase, selection_done, batch_id, random_high_auto)
+                   VALUES (?, ?, ?, ?, ?, ?, 'created', ?, ?, ?)""",
                 (
                     game_req.date, location, game_req.algorithm, game_req.cap,
                     1 if game_req.cap_enabled else 0, owner_id,
                     1 if game_req.algorithm == "first_come" else 0,
                     batch_id,
+                    1 if game_req.random_high_auto else 0,
                 ),
             )
             game_id = cursor.lastrowid
@@ -1338,6 +1340,7 @@ async def _get_game_out(db, game_id: int) -> GameOut:
         notified_at=g.get("notified_at"), phase=g["phase"],
         selection_done=bool(g["selection_done"]), closed=bool(g["closed"]),
         batch_id=g.get("batch_id"),
+        random_high_auto=bool(g.get("random_high_auto", 1)),
         auto_selection_at=sel_job.get("scheduled_at") if sel_job.get("status") == "pending" else None,
         notify_standard_at=std_job.get("scheduled_at"),
         notify_low_at=low_job.get("scheduled_at"),

@@ -229,6 +229,8 @@ class Scheduler:
         """
         Send signup-open notifications to all approved players of a given
         priority tier who haven't already been notified for this game.
+        If random_high_auto is True and this is a random game notifying high
+        priority, also auto-sign them up (guaranteed spot).
         """
         # Get players of this priority who haven't been notified
         cursor = await db.execute(
@@ -246,6 +248,24 @@ class Scheduler:
         if not players:
             logger.info(f"Game {game_id}: no {priority}-priority players to notify")
             return
+
+        # Auto-sign up high-priority players if random_high_auto is enabled
+        if (
+            priority == "high"
+            and game.get("algorithm") == "random"
+            and game.get("random_high_auto", 1)
+        ):
+            for pid in players:
+                await db.execute(
+                    """INSERT OR IGNORE INTO game_signups
+                       (game_id, player_id, status, owner_added)
+                       VALUES (?, ?, 'pending', 1)""",
+                    (game_id, pid),
+                )
+            await db.commit()
+            logger.info(
+                f"Game {game_id}: auto-signed up {len(players)} high-priority players"
+            )
 
         logger.info(
             f"Game {game_id}: notifying {len(players)} {priority}-priority players"
@@ -378,6 +398,19 @@ async def schedule_game_notifications(game_id: int, notify_at: str | None):
             )
             high_players = [r["id"] for r in await cursor2.fetchall()]
             if high_players:
+                # Auto-sign up high-priority if random_high_auto is on
+                if g["algorithm"] == "random" and g.get("random_high_auto", 1):
+                    for pid in high_players:
+                        await db.execute(
+                            """INSERT OR IGNORE INTO game_signups
+                               (game_id, player_id, status, owner_added)
+                               VALUES (?, ?, 'pending', 1)""",
+                            (game_id, pid),
+                        )
+                    await db.commit()
+                    logger.info(
+                        f"Game {game_id}: auto-signed up {len(high_players)} high-priority players"
+                    )
                 await notify_game_signup_open(
                     db, game_id, high_players, g["date"], g["location"]
                 )

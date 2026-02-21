@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS games (
     selection_done INTEGER DEFAULT 0,
     closed INTEGER DEFAULT 0,
     batch_id TEXT,
+    random_high_auto INTEGER DEFAULT 1,
     FOREIGN KEY (created_by) REFERENCES players(id)
 );
 
@@ -197,6 +198,8 @@ async def init_db():
         gcols = {row["name"] for row in await cursor.fetchall()}
         if "batch_id" not in gcols:
             await db.execute("ALTER TABLE games ADD COLUMN batch_id TEXT")
+        if "random_high_auto" not in gcols:
+            await db.execute("ALTER TABLE games ADD COLUMN random_high_auto INTEGER DEFAULT 1")
 
         # Migrate notif_pref 'push' → 'email' for existing players
         await db.execute("UPDATE players SET notif_pref = 'email' WHERE notif_pref = 'push'")
