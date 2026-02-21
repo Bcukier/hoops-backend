@@ -60,7 +60,25 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
     from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
 
     # HTML version
+    import re
     html_body = body.replace("\n", "<br>")
+    # Convert "Open the app...:\n<URL>" into a styled hyperlink in HTML
+    html_body = re.sub(
+        r'Open the app(.*?):<br>https?://[^\s<]+',
+        r'<a href="https://www.goatcommish.com" style="color:#ff6a2f;font-weight:bold;text-decoration:underline;">Open the app</a>\1.',
+        html_body,
+    )
+    # Linkify any remaining bare URLs (e.g. password reset links)
+    # Split around existing <a> tags to avoid double-linking
+    parts = re.split(r'(<a [^>]*>.*?</a>)', html_body)
+    for i, part in enumerate(parts):
+        if not part.startswith('<a '):
+            parts[i] = re.sub(
+                r'(https?://[^\s<]+)',
+                r'<a href="\1" style="color:#ff6a2f;text-decoration:underline;">\1</a>',
+                part,
+            )
+    html_body = ''.join(parts)
     html = f"""\
     <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;">
         <h2 style="color:#ff6a2f;">{subject}</h2>
@@ -229,7 +247,8 @@ async def notify_game_signup_open(
             f"Signup is open for pickup basketball!\n\n"
             f"📍 {game_location}\n"
             f"🕐 {nice_date}\n\n"
-            f"Open the app to sign up before spots fill."
+            f"Open the app to sign up before spots fill:\n"
+            f"https://www.goatcommish.com"
         )
         await send_notification(db, pid, channel, subject, body)
         await db.execute(
@@ -337,7 +356,8 @@ async def notify_owners_new_signup(
             db, owner["id"], owner["notif_pref"],
             "👤 New Player Signup",
             f"{player_name} ({player_email}) has registered and needs approval.\n\n"
-            f"Open the app to review and approve.",
+            f"Open the app to review and approve:\n"
+            f"https://www.goatcommish.com",
         )
 
 
