@@ -38,6 +38,7 @@ h1,h2,h3,h4,h5 { font-family:'Outfit',sans-serif; }
 .btn-danger:hover { background:rgba(239,68,68,0.25); }
 .btn-sm { padding:6px 14px; font-size:12px; }
 input,select,textarea { background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-family:'DM Sans',sans-serif; font-size:14px; width:100%; outline:none; transition:border .2s; }
+input[type="datetime-local"] { max-width:100%; }
 input:focus,select:focus,textarea:focus { border-color:var(--orange); }
 select { cursor:pointer; }
 label { font-size:13px; color:var(--text2); font-weight:500; display:block; margin-bottom:4px; }
@@ -833,7 +834,7 @@ function renderCreateGame() {
 
   return `<div class="fade-in" style="max-width:600px;">
     <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">Create Game</h2>
-    <div class="card"><div style="display:grid;gap:16px;">
+    <div class="card"><div style="display:grid;gap:16px;overflow:hidden;">
       ${groupSelector}
       <div id="cg-game-slots">
         <div class="cg-slot" data-index="0">
