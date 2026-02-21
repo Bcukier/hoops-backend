@@ -231,8 +231,12 @@ async def notify_game_signup_open(
         from datetime import datetime as dt
         d = dt.fromisoformat(game_date)
         nice_date = d.strftime("%A, %B %d at %I:%M %p")
+        subject_day = d.strftime("%A")
+        subject_time = d.strftime("%I:%M %p").lstrip("0")
     except Exception:
         nice_date = game_date
+        subject_day = game_date
+        subject_time = ""
 
     for pid in player_ids:
         cursor = await db.execute(
@@ -242,7 +246,7 @@ async def notify_game_signup_open(
         if not row:
             continue
         channel = row["notif_pref"]
-        subject = "🏀 Game Signup Open"
+        subject = f"Hoops - New Game {subject_day} {subject_time}@{game_location}"
         body = (
             f"Signup is open for pickup basketball!\n\n"
             f"📍 {game_location}\n"
