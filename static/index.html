@@ -170,6 +170,8 @@ let cachedGames = [];
 let cachedPlayers = [];
 let cachedSettings = null;
 let cachedLocations = [];
+let adminData = { overview: null, players: [], games: [], groups: [] };
+let adminTab = 'overview';
 
 let mgmtTab = 'roster';
 let rosterSort = 'priority'; // 'priority', 'first', 'last'
@@ -184,6 +186,7 @@ let invitationPromptShown = false; // don't show twice per session
 // ════════════════════════════════════════════════════════════
 function isOwner() { return currentUser && currentUser.role === 'owner'; }
 function isOrganizer() { return currentUser && currentUser.groups && currentUser.groups.some(g => g.role === 'organizer' && g.status === 'active'); }
+function isSuperuser() { return currentUser && currentUser.is_superuser; }
 function myGroups() { return (currentUser && currentUser.groups) ? currentUser.groups.filter(g => g.status === 'active') : []; }
 function orgGroups() { return myGroups().filter(g => g.role === 'organizer'); }
 function pendingInvitations() { return (currentUser && currentUser.pending_invitations) ? currentUser.pending_invitations : []; }
@@ -322,6 +325,7 @@ async function loadPageData() {
   if (['player_mgmt'].includes(currentPage)) p.push(fetchPlayers());
   if (['owner_settings'].includes(currentPage)) p.push(fetchSettings());
   if (['create_game'].includes(currentPage)) p.push(fetchPlayers(), fetchSettings());
+  if (currentPage === 'admin' && isSuperuser()) p.push(fetchAdminData());
   await Promise.all(p);
 }
 
@@ -344,6 +348,7 @@ function render() {
     case 'owner_settings': content = renderOwnerSettings(); break;
     case 'player_mgmt': content = renderPlayerMgmt(); break;
     case 'algorithm_info': content = renderAlgorithmInfo(); break;
+    case 'admin': content = isSuperuser() ? renderAdmin() : renderGames(); break;
     default: content = renderGames();
   }
   app.innerHTML = nav + `<main style="max-width:1200px;margin:0 auto;padding:20px;">${content}</main>`;
@@ -365,6 +370,7 @@ function renderNav() {
       ${org?`<a onclick="navigate('player_mgmt')" class="${currentPage==='player_mgmt'?'active':''}">Players</a>`:''}
       <a onclick="navigate('player_settings')" class="${currentPage==='player_settings'?'active':''}">Settings${invBadge}</a>
       ${org?`<a onclick="navigate('owner_settings')" class="${currentPage==='owner_settings'?'active':''}">Organizer</a>`:''}
+      ${isSuperuser()?`<a onclick="navigate('admin')" class="${currentPage==='admin'?'active':''}" style="color:var(--orange);">Admin</a>`:''}
       <a onclick="doLogout()" style="color:var(--red)">Logout</a>
     </div>
     <button class="hamburger" onclick="toggleMobileMenu()">☰</button>
@@ -377,6 +383,7 @@ function renderNav() {
       ${org?`<a onclick="navigate('player_mgmt');mobileMenuOpen=false;" class="${currentPage==='player_mgmt'?'active':''}">👥 Players</a>`:''}
       <a onclick="navigate('player_settings');mobileMenuOpen=false;" class="${currentPage==='player_settings'?'active':''}">⚙ Settings${invBadge}</a>
       ${org?`<a onclick="navigate('owner_settings');mobileMenuOpen=false;" class="${currentPage==='owner_settings'?'active':''}">🔧 Organizer</a>`:''}
+      ${isSuperuser()?`<a onclick="navigate('admin');mobileMenuOpen=false;" class="${currentPage==='admin'?'active':''}" style="color:var(--orange);">👑 Admin</a>`:''}
       <a onclick="doLogout()" style="color:var(--red)">🚪 Logout</a>
     </div>
   </div>`;
@@ -1348,6 +1355,172 @@ async function importCSV() {
   } catch(e) { showToast(e.message,'error'); }
 }
 
+// ═══ ADMIN / SUPERUSER ═══════════════════════════════════════
+async function fetchAdminData() {
+  try {
+    const [overview, players, games, groups] = await Promise.all([
+      api('/admin/overview'), api('/admin/players'), api('/admin/games'), api('/admin/groups')
+    ]);
+    adminData = { overview, players, games, groups };
+  } catch(e) { console.error('Admin fetch error:', e); }
+}
+
+function renderAdmin() {
+  if (!isSuperuser()) return '<p>Access denied</p>';
+  const ov = adminData.overview;
+  const tabs = ['overview','players','games','groups'].map(t =>
+    `<button class="btn-secondary btn-sm ${adminTab===t?'active':''}" onclick="adminTab='${t}';render()">${t.charAt(0).toUpperCase()+t.slice(1)}</button>`
+  ).join('');
+
+  let body = '';
+  if (adminTab === 'overview') {
+    body = ov ? `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px;">
+        <div class="card" style="text-align:center;padding:20px;">
+          <div style="font-size:28px;font-weight:800;color:var(--orange);">${ov.total_players}</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:4px;">Players</div></div>
+        <div class="card" style="text-align:center;padding:20px;">
+          <div style="font-size:28px;font-weight:800;color:var(--orange);">${ov.total_groups}</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:4px;">Groups</div></div>
+        <div class="card" style="text-align:center;padding:20px;">
+          <div style="font-size:28px;font-weight:800;color:var(--orange);">${ov.pending_games}</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:4px;">Open Games</div></div>
+        <div class="card" style="text-align:center;padding:20px;">
+          <div style="font-size:28px;font-weight:800;color:var(--orange);">${ov.total_games}</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:4px;">Total Games</div></div>
+        <div class="card" style="text-align:center;padding:20px;">
+          <div style="font-size:28px;font-weight:800;color:var(--orange);">${ov.total_signups}</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:4px;">Total Signups</div></div>
+        <div class="card" style="text-align:center;padding:20px;">
+          <div style="font-size:28px;font-weight:800;color:var(--orange);">${ov.total_group_members}</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:4px;">Group Members</div></div>
+      </div>` : '<p style="color:var(--text2);margin-top:16px;">Loading...</p>';
+  } else if (adminTab === 'players') {
+    const rows = adminData.players.map(p => {
+      const groupBadges = (p.groups||[]).map(g =>
+        `<span class="badge badge-blue" style="font-size:11px;">${esc(g.group_name)} (${g.role})</span>`).join(' ');
+      return `<tr>
+        <td>${p.id}</td>
+        <td>${esc(p.name)}</td>
+        <td style="font-size:12px;">${esc(p.email)}</td>
+        <td>${groupBadges||'<span style="color:var(--text2);font-size:11px;">none</span>'}</td>
+        <td>${p.is_superuser?'<span class="badge" style="background:var(--orange);color:#fff;font-size:11px;">SUPER</span>':''}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn-secondary btn-sm" onclick="adminEditPlayer(${p.id})">Edit</button>
+          <button class="btn-secondary btn-sm" style="color:#e74c3c;" onclick="adminDeletePlayer(${p.id},'${esc(p.name)}')">Del</button>
+        </td></tr>`;
+    }).join('');
+    body = `<div style="overflow-x:auto;margin-top:16px;"><table class="data-table">
+      <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Groups</th><th>Role</th><th>Actions</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  } else if (adminTab === 'games') {
+    const rows = adminData.games.map(g => {
+      const dt = new Date(g.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+      const status = g.closed ? '<span class="badge" style="background:#666;color:#fff;font-size:11px;">Closed</span>'
+        : '<span class="badge" style="background:#27ae60;color:#fff;font-size:11px;">Open</span>';
+      return `<tr>
+        <td>${g.id}</td>
+        <td style="font-size:12px;">${dt}</td>
+        <td>${esc(g.location)}</td>
+        <td><span class="badge badge-blue" style="font-size:11px;">${esc(g.group_name||'?')}</span></td>
+        <td>${g.signup_count}${g.cap_enabled?'/'+g.cap:''}</td>
+        <td>${status}</td>
+        <td style="font-size:12px;">${esc(g.creator_name)}</td>
+        <td><button class="btn-secondary btn-sm" style="color:#e74c3c;" onclick="adminDeleteGame(${g.id})">Del</button></td>
+      </tr>`;
+    }).join('');
+    body = `<div style="overflow-x:auto;margin-top:16px;"><table class="data-table">
+      <thead><tr><th>ID</th><th>Date</th><th>Location</th><th>Group</th><th>Signups</th><th>Status</th><th>Creator</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  } else if (adminTab === 'groups') {
+    const rows = adminData.groups.map(g => {
+      return `<tr>
+        <td>${g.id}</td>
+        <td>${esc(g.name)}</td>
+        <td>${g.member_count}</td>
+        <td>${g.game_count} open</td>
+        <td style="white-space:nowrap;">
+          <button class="btn-secondary btn-sm" onclick="adminEditGroup(${g.id},'${esc(g.name)}')">Edit</button>
+          <button class="btn-secondary btn-sm" style="color:#e74c3c;" onclick="adminDeleteGroup(${g.id},'${esc(g.name)}')">Del</button>
+        </td></tr>`;
+    }).join('');
+    body = `<div style="overflow-x:auto;margin-top:16px;"><table class="data-table">
+      <thead><tr><th>ID</th><th>Name</th><th>Members</th><th>Games</th><th>Actions</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+
+  return `<div class="fade-in" style="max-width:900px;">
+    <h2 style="font-weight:800;font-size:24px;margin-bottom:4px;">👑 Admin Panel</h2>
+    <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">Superuser access — manage all data across groups</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">${tabs}</div>
+    ${body}
+  </div>`;
+}
+
+async function adminDeletePlayer(id, name) {
+  if (!confirm('Delete player "'+name+'" and all their signups? This cannot be undone.')) return;
+  try { await api('/admin/players/'+id, {method:'DELETE'}); showToast('Player deleted','success'); await fetchAdminData(); render(); }
+  catch(e) { showToast(e.message,'error'); }
+}
+
+async function adminDeleteGame(id) {
+  if (!confirm('Delete game #'+id+' and all signups? This cannot be undone.')) return;
+  try { await api('/admin/games/'+id, {method:'DELETE'}); showToast('Game deleted','success'); await fetchAdminData(); render(); }
+  catch(e) { showToast(e.message,'error'); }
+}
+
+async function adminDeleteGroup(id, name) {
+  if (!confirm('Delete group "'+name+'" and ALL its games, members, settings? This cannot be undone.')) return;
+  try { await api('/admin/groups/'+id, {method:'DELETE'}); showToast('Group deleted','success'); await fetchAdminData(); render(); }
+  catch(e) { showToast(e.message,'error'); }
+}
+
+function adminEditPlayer(id) {
+  const p = adminData.players.find(x => x.id === id);
+  if (!p) return;
+  const html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;" id="admin-modal" onclick="if(event.target===this)this.remove()">
+    <div class="card" style="max-width:420px;width:100%;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Edit Player</h3>
+    <div style="display:grid;gap:12px;">
+      <div><label>Name</label><input id="ae-name" value="${esc(p.name)}"></div>
+      <div><label>Email</label><input id="ae-email" value="${esc(p.email)}"></div>
+      <div><label>Mobile</label><input id="ae-mobile" value="${esc(p.mobile||'')}"></div>
+      <div><label>New Password (leave blank to keep)</label><input id="ae-password" type="password" placeholder=""></div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="ae-super" ${p.is_superuser?'checked':''}><span class="slider"></span></label>
+        <span style="font-size:14px;">Superuser</span></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-primary" style="flex:1;" onclick="adminSavePlayer(${p.id})">Save</button>
+        <button class="btn-secondary" onclick="document.getElementById('admin-modal').remove()">Cancel</button>
+      </div>
+    </div></div></div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function adminSavePlayer(id) {
+  const data = {
+    name: document.getElementById('ae-name').value,
+    email: document.getElementById('ae-email').value,
+    mobile: document.getElementById('ae-mobile').value,
+    is_superuser: document.getElementById('ae-super').checked,
+  };
+  const pw = document.getElementById('ae-password').value;
+  if (pw) data.password = pw;
+  try {
+    await api('/admin/players/'+id, {method:'PATCH', body: JSON.stringify(data)});
+    document.getElementById('admin-modal')?.remove();
+    showToast('Player updated','success');
+    await fetchAdminData(); render();
+  } catch(e) { showToast(e.message,'error'); }
+}
+
+function adminEditGroup(id, name) {
+  const newName = prompt('Rename group:', name);
+  if (!newName || newName === name) return;
+  api('/admin/groups/'+id, {method:'PATCH', body: JSON.stringify({name: newName})})
+    .then(() => { showToast('Group renamed','success'); fetchAdminData().then(()=>render()); })
+    .catch(e => showToast(e.message,'error'));
+}
+
 // ═══ ALGORITHM INFO ══════════════════════════════════════════
 function renderAlgorithmInfo() {
   return `<div class="fade-in" style="max-width:700px;">
@@ -1439,6 +1612,7 @@ async function doLogout() {
   try { await api('/auth/logout',{method:'POST'}); } catch {}
   clearToken(); currentUser = null; currentPage = 'login';
   cachedGames=[]; cachedPlayers=[]; cachedSettings=null; cachedLocations=[];
+  adminData={ overview:null, players:[], games:[], groups:[] }; adminTab='overview';
   stopGameRefresh();
   render();
 }

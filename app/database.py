@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS players (
     status TEXT NOT NULL DEFAULT 'approved' CHECK(status IN ('pending','approved','denied')),
     notif_pref TEXT NOT NULL DEFAULT 'email',
     force_password_change INTEGER DEFAULT 0,
+    is_superuser INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -190,6 +191,7 @@ async def _run_migrations(db):
     # Add columns that may be missing from older DBs
     for tbl, col, defn in [
         ("players", "force_password_change", "INTEGER DEFAULT 0"),
+        ("players", "is_superuser", "INTEGER DEFAULT 0"),
         ("games", "group_id", "INTEGER NOT NULL DEFAULT 0"),
         ("games", "random_high_auto", "INTEGER DEFAULT 1"),
         ("games", "batch_id", "TEXT"),

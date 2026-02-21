@@ -61,6 +61,16 @@ async def lifespan(app: FastAPI):
     await init_db()
     if DEMO_MODE:
         await seed_demo_data()
+    # Bootstrap superuser from env var
+    su_email = os.environ.get("HOOPS_SUPERUSER_EMAIL", "").strip().lower()
+    if su_email:
+        db = await get_db()
+        try:
+            await db.execute("UPDATE players SET is_superuser=1 WHERE email=? COLLATE NOCASE", (su_email,))
+            await db.commit()
+            logger.info(f"👑 Superuser bootstrapped: {su_email}")
+        finally:
+            await db.close()
     await scheduler.start()
     log_notification_config()
     logger.info("🏀 GOATcommish ready (demo=%s)", DEMO_MODE)
@@ -127,6 +137,7 @@ async def player_out_from_db(db, player_id: int) -> PlayerOut:
         id=d["id"], name=d["name"], email=d["email"], mobile=d.get("mobile",""),
         role=role, priority=d.get("priority","standard"), status=d["status"],
         notif_pref=d["notif_pref"], force_password_change=bool(d.get("force_password_change",0)),
+        is_superuser=bool(d.get("is_superuser",0)),
         created_at=str(d["created_at"]), groups=groups, pending_invitations=invitations)
 
 
@@ -151,6 +162,14 @@ async def get_player_group_ids(db, player_id: int) -> list[int]:
         "SELECT group_id FROM group_members WHERE player_id=? AND status='active'",
         (player_id,))
     return [r["group_id"] for r in await cursor.fetchall()]
+
+
+async def require_superuser(db, player_id: int):
+    """Verify player is a superuser."""
+    cursor = await db.execute("SELECT is_superuser FROM players WHERE id=?", (player_id,))
+    row = await cursor.fetchone()
+    if not row or not row["is_superuser"]:
+        raise HTTPException(403, "Superuser access required")
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -1347,6 +1366,230 @@ async def get_players_legacy(player_id: int = Depends(get_current_player_id)):
         org_gids = await get_organizer_group_ids(db, player_id)
         if not org_gids: raise HTTPException(403, "Not an organizer")
         return await get_group_players(org_gids[0], player_id)
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════
+# ADMIN / SUPERUSER
+# ═════════════════════════════════════════════════════════════════
+
+@app.get("/api/admin/overview")
+async def admin_overview(player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        stats = {}
+        for key, query in [
+            ("total_players", "SELECT COUNT(*) as c FROM players"),
+            ("total_groups", "SELECT COUNT(*) as c FROM groups"),
+            ("total_games", "SELECT COUNT(*) as c FROM games"),
+            ("pending_games", "SELECT COUNT(*) as c FROM games WHERE closed=0"),
+            ("total_signups", "SELECT COUNT(*) as c FROM game_signups"),
+            ("total_group_members", "SELECT COUNT(*) as c FROM group_members WHERE status='active'"),
+        ]:
+            cursor = await db.execute(query)
+            stats[key] = (await cursor.fetchone())["c"]
+        return stats
+    finally:
+        await db.close()
+
+
+@app.get("/api/admin/players")
+async def admin_list_players(player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        cursor = await db.execute("SELECT * FROM players ORDER BY name")
+        players = []
+        for p in await cursor.fetchall():
+            d = dict(p)
+            # Get group memberships
+            c2 = await db.execute(
+                """SELECT gm.group_id, g.name as group_name, gm.role, gm.priority, gm.status
+                   FROM group_members gm JOIN groups g ON g.id=gm.group_id
+                   WHERE gm.player_id=?""", (d["id"],))
+            d["groups"] = [dict(r) for r in await c2.fetchall()]
+            d["is_superuser"] = bool(d.get("is_superuser", 0))
+            d.pop("password_hash", None)
+            players.append(d)
+        return players
+    finally:
+        await db.close()
+
+
+@app.patch("/api/admin/players/{target_id}")
+async def admin_update_player(target_id: int, req: dict, player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        sets, vals = [], []
+        for field in ["name", "email", "mobile", "notif_pref", "status"]:
+            if field in req:
+                sets.append(f"{field}=?"); vals.append(req[field])
+        if "is_superuser" in req:
+            sets.append("is_superuser=?"); vals.append(1 if req["is_superuser"] else 0)
+        if "password" in req and req["password"]:
+            sets.append("password_hash=?"); vals.append(hash_password(req["password"]))
+            sets.append("force_password_change=1")
+        if not sets:
+            raise HTTPException(400, "No fields to update")
+        vals.append(target_id)
+        await db.execute(f"UPDATE players SET {','.join(sets)} WHERE id=?", vals)
+        await db.commit()
+        return {"message": "Player updated"}
+    finally:
+        await db.close()
+
+
+@app.delete("/api/admin/players/{target_id}")
+async def admin_delete_player(target_id: int, player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        if target_id == player_id:
+            raise HTTPException(400, "Cannot delete yourself")
+        await db.execute("DELETE FROM game_signups WHERE player_id=?", (target_id,))
+        await db.execute("DELETE FROM group_members WHERE player_id=?", (target_id,))
+        await db.execute("DELETE FROM group_invitations WHERE player_id=?", (target_id,))
+        await db.execute("DELETE FROM game_notifications WHERE player_id=?", (target_id,))
+        await db.execute("DELETE FROM players WHERE id=?", (target_id,))
+        await db.commit()
+        return {"message": "Player deleted"}
+    finally:
+        await db.close()
+
+
+@app.get("/api/admin/games")
+async def admin_list_games(player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        cursor = await db.execute(
+            """SELECT g.*, grp.name as group_name, p.name as creator_name
+               FROM games g
+               LEFT JOIN groups grp ON grp.id=g.group_id
+               LEFT JOIN players p ON p.id=g.created_by
+               ORDER BY g.date DESC""")
+        games = []
+        for row in await cursor.fetchall():
+            d = dict(row)
+            d["group_name"] = d.get("group_name", "")
+            d["creator_name"] = d.get("creator_name", "Unknown")
+            # Get signup count
+            c2 = await db.execute(
+                "SELECT COUNT(*) as c FROM game_signups WHERE game_id=? AND status='confirmed'",
+                (d["id"],))
+            d["signup_count"] = (await c2.fetchone())["c"]
+            games.append(d)
+        return games
+    finally:
+        await db.close()
+
+
+@app.patch("/api/admin/games/{game_id}")
+async def admin_update_game(game_id: int, req: dict, player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        sets, vals = [], []
+        for field in ["date", "location", "algorithm", "cap", "cap_enabled", "closed", "phase"]:
+            if field in req:
+                sets.append(f"{field}=?"); vals.append(req[field])
+        if not sets:
+            raise HTTPException(400, "No fields to update")
+        vals.append(game_id)
+        await db.execute(f"UPDATE games SET {','.join(sets)} WHERE id=?", vals)
+        await db.commit()
+        return {"message": "Game updated"}
+    finally:
+        await db.close()
+
+
+@app.delete("/api/admin/games/{game_id}")
+async def admin_delete_game(game_id: int, player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        await db.execute("DELETE FROM game_signups WHERE game_id=?", (game_id,))
+        await db.execute("DELETE FROM game_notifications WHERE game_id=?", (game_id,))
+        await db.execute("DELETE FROM scheduler_jobs WHERE game_id=?", (game_id,))
+        await db.execute("DELETE FROM games WHERE id=?", (game_id,))
+        await db.commit()
+        return {"message": "Game deleted"}
+    finally:
+        await db.close()
+
+
+@app.get("/api/admin/groups")
+async def admin_list_groups(player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        cursor = await db.execute("SELECT * FROM groups ORDER BY name")
+        groups = []
+        for g in await cursor.fetchall():
+            d = dict(g)
+            c2 = await db.execute(
+                "SELECT COUNT(*) as c FROM group_members WHERE group_id=? AND status='active'",
+                (d["id"],))
+            d["member_count"] = (await c2.fetchone())["c"]
+            c3 = await db.execute(
+                "SELECT COUNT(*) as c FROM games WHERE group_id=? AND closed=0",
+                (d["id"],))
+            d["game_count"] = (await c3.fetchone())["c"]
+            groups.append(d)
+        return groups
+    finally:
+        await db.close()
+
+
+@app.patch("/api/admin/groups/{group_id}")
+async def admin_update_group(group_id: int, req: dict, player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        if "name" in req:
+            await db.execute("UPDATE groups SET name=? WHERE id=?", (req["name"], group_id))
+            await db.commit()
+        return {"message": "Group updated"}
+    finally:
+        await db.close()
+
+
+@app.delete("/api/admin/groups/{group_id}")
+async def admin_delete_group(group_id: int, player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        await db.execute("DELETE FROM game_signups WHERE game_id IN (SELECT id FROM games WHERE group_id=?)", (group_id,))
+        await db.execute("DELETE FROM game_notifications WHERE game_id IN (SELECT id FROM games WHERE group_id=?)", (group_id,))
+        await db.execute("DELETE FROM scheduler_jobs WHERE game_id IN (SELECT id FROM games WHERE group_id=?)", (group_id,))
+        await db.execute("DELETE FROM games WHERE group_id=?", (group_id,))
+        await db.execute("DELETE FROM group_members WHERE group_id=?", (group_id,))
+        await db.execute("DELETE FROM group_invitations WHERE group_id=?", (group_id,))
+        await db.execute("DELETE FROM group_settings WHERE group_id=?", (group_id,))
+        await db.execute("DELETE FROM locations WHERE group_id=?", (group_id,))
+        await db.execute("DELETE FROM groups WHERE id=?", (group_id,))
+        await db.commit()
+        return {"message": "Group and all associated data deleted"}
+    finally:
+        await db.close()
+
+
+@app.post("/api/admin/make-superuser")
+async def admin_make_superuser(req: dict, player_id: int = Depends(get_current_player_id)):
+    """Promote/demote superuser status. Only existing superusers can do this."""
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        target_id = req.get("player_id")
+        is_super = 1 if req.get("is_superuser", False) else 0
+        if target_id == player_id and not is_super:
+            raise HTTPException(400, "Cannot remove your own superuser status")
+        await db.execute("UPDATE players SET is_superuser=? WHERE id=?", (is_super, target_id))
+        await db.commit()
+        return {"message": "Superuser status updated"}
     finally:
         await db.close()
 
