@@ -108,7 +108,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Hoops — Pickup Basketball Manager",
+    title="GOATCOMMISH — Pickup Basketball",
     version="2.0.0",
     lifespan=lifespan,
     docs_url="/docs" if DEMO_MODE else None,     # Disable Swagger in production
@@ -401,13 +401,13 @@ async def request_password_reset(email: str = Query(...)):
 
         # Send via preferred channel
         from app.notifications import send_email, send_sms
-        subject = "🏀 Hoops — Password Reset"
+        subject = "GOATCOMMISH — Password Reset"
         body = f"Click this link to reset your password (expires in 1 hour):\n\n{reset_link}\n\nIf you didn't request this, you can ignore this email."
 
         if player["notif_pref"] == "sms" and player["mobile"]:
             asyncio.create_task(send_sms(
                 player["mobile"],
-                f"Hoops password reset:\n{reset_link}\n\nExpires in 1 hour."
+                f"GOATCOMMISH password reset:\n{reset_link}\n\nExpires in 1 hour."
             ))
         else:
             asyncio.create_task(send_email(player["email"], subject, body))

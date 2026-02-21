@@ -182,7 +182,7 @@ HOOPS_ALLOWED_ORIGINS=$ALLOWED_ORIGINS
 # Get API key at: https://app.sendgrid.com/settings/api_keys
 SENDGRID_API_KEY=
 SENDGRID_FROM_EMAIL=hoops@goatcommish.com
-SENDGRID_FROM_NAME=🏀 Hoops
+SENDGRID_FROM_NAME=GOATCOMMISH
 
 # ── SMS (Twilio) ──
 # Get credentials at: https://www.twilio.com/console
@@ -201,7 +201,7 @@ success "Environment file created (secret key generated)"
 info "Creating systemd service..."
 cat > /etc/systemd/system/hoops.service << EOF
 [Unit]
-Description=Hoops Pickup Basketball Manager
+Description=GOATCOMMISH Pickup Basketball
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=5
@@ -339,7 +339,7 @@ cat > /usr/local/bin/hoops-deploy << 'SCRIPT'
 #!/usr/bin/env bash
 # Quick deploy: pulls latest code and restarts the service
 set -euo pipefail
-echo "🏀 Deploying Hoops..."
+echo "🏀 Deploying GOATCOMMISH..."
 cd /opt/hoops/app
 sudo -u hoops git pull
 sudo -u hoops bash -c "source venv/bin/activate && pip install --quiet -r requirements.txt"

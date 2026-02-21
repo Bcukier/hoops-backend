@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Run — Pickup Basketball</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<title>GOATCOMMISH — Pickup Basketball</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -265,7 +267,7 @@ function renderNav() {
   const pc = cachedPendingCount;
   const pendingBadge = isOwner()&&pc>0 ? `<span style="background:var(--red);color:#fff;border-radius:50%;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">${pc}</span>` : '';
   return `<nav><div class="inner">
-    <div class="logo" onclick="navigate('games')">🏀 RUN <span>pickup hoops</span></div>
+    <div class="logo" onclick="navigate('games')"><img src="/static/icon-40.png" style="width:32px;height:32px;vertical-align:middle;"> GOATCOMMISH</div>
     <div class="nav-links">
       <a onclick="navigate('games')" class="${currentPage==='games'?'active':''}">Games</a>
       ${isOwner()?`<a onclick="navigate('create_game')" class="${currentPage==='create_game'?'active':''}">Create Game</a>`:''}
@@ -278,7 +280,7 @@ function renderNav() {
   </div></nav>
   <div class="mobile-menu ${mobileMenuOpen?'open':''}" onclick="closeMobileMenu(event)">
     <div class="mobile-menu-content">
-      <div class="logo" style="margin-bottom:20px;font-size:20px" onclick="navigate('games');mobileMenuOpen=false;">🏀 RUN</div>
+      <div class="logo" style="margin-bottom:20px;font-size:20px" onclick="navigate('games');mobileMenuOpen=false;"><img src="/static/icon-40.png" style="width:28px;height:28px;vertical-align:middle;"> GOATCOMMISH</div>
       <a onclick="navigate('games');mobileMenuOpen=false;" class="${currentPage==='games'?'active':''}">🎮 Games</a>
       ${isOwner()?`<a onclick="navigate('create_game');mobileMenuOpen=false;" class="${currentPage==='create_game'?'active':''}">➕ Create Game</a>`:''}
       ${isOwner()?`<a onclick="navigate('player_mgmt');mobileMenuOpen=false;" class="${currentPage==='player_mgmt'?'active':''}">👥 Players${pendingBadge}</a>`:''}
@@ -293,9 +295,8 @@ function renderNav() {
 function renderLogin() {
   return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
     <div class="card glow-border fade-in" style="max-width:400px;width:100%;text-align:center;">
-      <div style="font-size:48px;margin-bottom:8px;">🏀</div>
-      <h1 style="font-size:32px;font-weight:900;margin-bottom:4px;">RUN</h1>
-      <p style="color:var(--text2);font-size:14px;margin-bottom:28px;">Pickup Basketball Manager</p>
+      <img src="/static/logo.png" style="width:200px;margin:0 auto 16px;display:block;">
+      <p style="color:var(--text2);font-size:14px;margin-bottom:28px;">Pickup Basketball</p>
       <div style="text-align:left;">
         <label>Email</label>
         <input type="email" id="login-email" placeholder="you@example.com" style="margin-bottom:12px;">
@@ -461,7 +462,7 @@ function renderGames() {
   if (loading) return renderSpinner();
   const games = cachedGames.sort((a,b)=>new Date(a.date)-new Date(b.date));
   if (!games.length) return `<div class="fade-in" style="text-align:center;padding:60px 20px;">
-    <div style="font-size:64px;margin-bottom:16px;">🏀</div>
+    <div style="font-size:64px;margin-bottom:16px;"><img src="/static/icon-192.png" style="width:80px;height:80px;"></div>
     <h2 style="font-weight:700;margin-bottom:8px;">No Games Available</h2>
     <p style="color:var(--text2);font-size:14px;">Check back later or ask an admin to create a game.</p></div>`;
 

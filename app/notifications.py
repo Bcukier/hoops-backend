@@ -4,7 +4,7 @@ Notification service with SendGrid (email) and Twilio (SMS) integration.
 Configure via environment variables:
   SENDGRID_API_KEY       - SendGrid API key
   SENDGRID_FROM_EMAIL    - Verified sender email (e.g. hoops@goatcommish.com)
-  SENDGRID_FROM_NAME     - Display name (default: 🏀 Hoops)
+  SENDGRID_FROM_NAME     - Display name (default: GOATCOMMISH)
   TWILIO_ACCOUNT_SID     - Twilio Account SID
   TWILIO_AUTH_TOKEN      - Twilio Auth Token
   TWILIO_FROM_NUMBER     - Twilio phone number (e.g. +15551234567)
@@ -27,7 +27,7 @@ logger = logging.getLogger("hoops.notifications")
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL = os.environ.get("SENDGRID_FROM_EMAIL", "")
-SENDGRID_FROM_NAME = os.environ.get("SENDGRID_FROM_NAME", "🏀 Hoops")
+SENDGRID_FROM_NAME = os.environ.get("SENDGRID_FROM_NAME", "GOATCOMMISH")
 
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
@@ -84,7 +84,7 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
         <h2 style="color:#ff6a2f;">{subject}</h2>
         <p style="color:#333;line-height:1.6;">{html_body}</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
-        <p style="color:#999;font-size:12px;">Sent by Hoops — Pickup Basketball Manager</p>
+        <p style="color:#999;font-size:12px;">Sent by GOATCOMMISH — Pickup Basketball</p>
     </div>"""
 
     message = Mail(
@@ -246,7 +246,7 @@ async def notify_game_signup_open(
         if not row:
             continue
         channel = row["notif_pref"]
-        subject = f"Hoops - New Game {subject_day} {subject_time}@{game_location}"
+        subject = f"GOATCOMMISH - New Game {subject_day} {subject_time}@{game_location}"
         body = (
             f"Signup is open for pickup basketball!\n\n"
             f"📍 {game_location}\n"
