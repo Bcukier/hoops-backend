@@ -397,6 +397,59 @@ async def change_password(req: dict, player_id: int = Depends(get_current_player
         await db.close()
 
 
+@app.post("/api/auth/reset-password")
+async def request_password_reset(email: str = Query(...)):
+    """Send a password reset link to the user's email."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id FROM players WHERE email=? COLLATE NOCASE", (email.strip().lower(),))
+        player = await cursor.fetchone()
+        # Always return success to avoid leaking whether email exists
+        if not player:
+            return {"message": "If that email is registered, a reset link has been sent."}
+        pid = player["id"]
+        token = secrets.token_urlsafe(32)
+        expires = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        await db.execute(
+            "INSERT INTO password_reset_tokens (player_id, token, expires_at) VALUES (?,?,?)",
+            (pid, token, expires))
+        await db.commit()
+        base_url = os.environ.get("HOOPS_BASE_URL", "https://www.goatcommish.com")
+        reset_url = f"{base_url}?reset={token}"
+        from app.notifications import send_email
+        await send_email(
+            email.strip().lower(),
+            "🔑 GOATcommish Password Reset",
+            f"Click the link below to reset your password:\n\n{reset_url}\n\nThis link expires in 24 hours. If you didn't request this, you can ignore this email."
+        )
+        return {"message": "If that email is registered, a reset link has been sent."}
+    finally:
+        await db.close()
+
+
+@app.post("/api/auth/reset-password/confirm")
+async def confirm_password_reset(token: str = Query(...), new_password: str = Query(...)):
+    """Reset password using a token from the email link."""
+    if len(new_password) < 4:
+        raise HTTPException(400, "Password must be at least 4 characters")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM password_reset_tokens WHERE token=? AND used=0", (token,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(400, "Invalid or expired reset token")
+        if row["expires_at"] < datetime.now(timezone.utc).isoformat():
+            raise HTTPException(400, "Reset token has expired")
+        await db.execute("UPDATE players SET password_hash=?, force_password_change=0 WHERE id=?",
+                         (hash_password(new_password), row["player_id"]))
+        await db.execute("UPDATE password_reset_tokens SET used=1 WHERE id=?", (row["id"],))
+        await db.commit()
+        return {"message": "Password has been reset. You can now log in."}
+    finally:
+        await db.close()
+
+
 # ═════════════════════════════════════════════════════════════════
 # GROUP ENDPOINTS
 # ═════════════════════════════════════════════════════════════════
