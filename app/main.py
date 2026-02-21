@@ -59,7 +59,8 @@ def bg_notify(coro_fn, *args):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    await seed_demo_data()
+    if DEMO_MODE:
+        await seed_demo_data()
     await scheduler.start()
     log_notification_config()
     logger.info("🏀 GOATcommish ready (demo=%s)", DEMO_MODE)
