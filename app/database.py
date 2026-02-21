@@ -210,6 +210,11 @@ async def _run_migrations(db):
     if (await cursor.fetchone())["c"] > 0:
         return  # Already migrated
 
+    # Only create friedland group if there are existing players to migrate
+    cursor = await db.execute("SELECT COUNT(*) as c FROM players")
+    if (await cursor.fetchone())["c"] == 0:
+        return  # Fresh install, no data to migrate
+
     # Create default "friedland" group
     await db.execute("INSERT OR IGNORE INTO groups (name) VALUES ('friedland')")
     cursor = await db.execute("SELECT id FROM groups WHERE name='friedland'")
