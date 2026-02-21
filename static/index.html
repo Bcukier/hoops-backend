@@ -712,7 +712,7 @@ function renderGameColumn(game) {
       <div class="date">${formatDate(game.date)}</div>
       <div class="time-loc">${formatTime(game.date)} · ${locDisplay}</div>
       <div class="cap">Max: ${cap} · ${algLabel}</div>${statusBadge}
-      ${myGroups().length > 1 && game.group_name ? `<div style="margin-top:4px;"><span class="badge badge-blue">${esc(game.group_name)}</span></div>` : ''}
+      ${game.group_name ? `<div style="margin-top:4px;"><span class="badge badge-blue">${esc(game.group_name)}</span></div>` : ''}
     </div>
     <div class="game-action">${actionBtn}</div>${ownerCtrl}
     ${editBtn ? `<div style="padding:0 16px 8px;">${editBtn}</div>` : ''}
