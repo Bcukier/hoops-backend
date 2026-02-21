@@ -23,7 +23,7 @@ class PlayerCreate(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
     mobile: str = Field(default="", max_length=20)
     password: Optional[str] = Field(default=None, min_length=4, max_length=128)
-    notif_pref: str = "email"
+    notif_pref: str = "email"   # comma-separated: "email", "sms", "email,sms", "none"
 
 
 class PlayerOut(BaseModel):
@@ -76,6 +76,17 @@ class GameCreate(BaseModel):
     notify_future_at: Optional[str] = None
 
 
+class BatchGameCreate(BaseModel):
+    """Create multiple games at once with a single batch notification."""
+    games: list[GameCreate] = Field(..., min_length=1, max_length=20)
+
+
+class GameUpdate(BaseModel):
+    """Edit an existing game (organizer only)."""
+    date: Optional[str] = None
+    location: Optional[str] = Field(default=None, max_length=200)
+
+
 class GameOut(BaseModel):
     id: int
     date: str
@@ -94,6 +105,7 @@ class GameOut(BaseModel):
     notify_low_at: Optional[str] = None
     notify_standard_status: Optional[str] = None
     notify_low_status: Optional[str] = None
+    batch_id: Optional[str] = None
     signups: list["SignupOut"] = []
 
 
@@ -106,30 +118,51 @@ class SignupOut(BaseModel):
     owner_added: bool
 
 
+# ── Locations ────────────────────────────────────────────────
+class LocationOut(BaseModel):
+    id: int
+    name: str
+    address: str = ""
+    sort_order: int = 0
+
+
+class LocationCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    address: str = Field(default="", max_length=500)
+
+
+class LocationUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    address: Optional[str] = Field(default=None, max_length=500)
+
+
+class LocationReorder(BaseModel):
+    """List of location IDs in the desired order."""
+    location_ids: list[int]
+
+
 # ── Settings ──────────────────────────────────────────────────
 class SettingsOut(BaseModel):
     default_cap: int
     cap_enabled: bool
     default_algorithm: str
+    default_location: str = ""
     high_priority_delay_minutes: int
     alternative_delay_minutes: int
     random_wait_period_minutes: int
     notify_owner_new_signup: bool
-    locations: list[str]
+    locations: list[LocationOut]
 
 
 class SettingsUpdate(BaseModel):
     default_cap: Optional[int] = Field(default=None, ge=2, le=100)
     cap_enabled: Optional[bool] = None
     default_algorithm: Optional[str] = None
+    default_location: Optional[str] = None
     high_priority_delay_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     alternative_delay_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     random_wait_period_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_owner_new_signup: Optional[bool] = None
-
-
-class LocationCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=200)
 
 
 # ── Notifications ─────────────────────────────────────────────

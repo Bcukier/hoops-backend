@@ -4,16 +4,20 @@ Notification service with SendGrid (email) and Twilio (SMS) integration.
 Configure via environment variables:
   SENDGRID_API_KEY       - SendGrid API key
   SENDGRID_FROM_EMAIL    - Verified sender email (e.g. hoops@goatcommish.com)
-  SENDGRID_FROM_NAME     - Display name (default: GOATCOMMISH)
+  SENDGRID_FROM_NAME     - Display name (default: GOATcommish)
   TWILIO_ACCOUNT_SID     - Twilio Account SID
   TWILIO_AUTH_TOKEN      - Twilio Auth Token
   TWILIO_FROM_NUMBER     - Twilio phone number (e.g. +15551234567)
 
 If credentials are missing, notifications are logged but not delivered.
+
+notif_pref is comma-separated: "email", "sms", "email,sms", or "none".
+When "none", no notifications are sent. Multi-select sends via ALL selected channels.
 """
 import os
 import logging
 import asyncio
+import re
 from datetime import datetime, timezone
 from functools import partial
 
@@ -27,7 +31,7 @@ logger = logging.getLogger("hoops.notifications")
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL = os.environ.get("SENDGRID_FROM_EMAIL", "")
-SENDGRID_FROM_NAME = os.environ.get("SENDGRID_FROM_NAME", "GOATCOMMISH")
+SENDGRID_FROM_NAME = os.environ.get("SENDGRID_FROM_NAME", "GOATcommish")
 
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
@@ -60,7 +64,6 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
     from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
 
     # HTML version
-    import re
     html_body = body.replace("\n", "<br>")
     # Convert "Open the app...:\n<URL>" into a styled hyperlink in HTML
     html_body = re.sub(
@@ -69,7 +72,6 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
         html_body,
     )
     # Linkify any remaining bare URLs (e.g. password reset links)
-    # Split around existing <a> tags to avoid double-linking
     parts = re.split(r'(<a [^>]*>.*?</a>)', html_body)
     for i, part in enumerate(parts):
         if not part.startswith('<a '):
@@ -79,12 +81,13 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
                 part,
             )
     html_body = ''.join(parts)
+
     html = f"""\
     <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;">
         <h2 style="color:#ff6a2f;">{subject}</h2>
         <p style="color:#333;line-height:1.6;">{html_body}</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
-        <p style="color:#999;font-size:12px;">Sent by GOATCOMMISH — Pickup Basketball</p>
+        <p style="color:#999;font-size:12px;">Sent by GOATcommish — Pickup Basketball</p>
     </div>"""
 
     message = Mail(
@@ -125,7 +128,6 @@ def _send_sms_sync(to_number: str, body: str) -> bool:
     # Ensure number has country code
     clean_number = to_number.strip()
     if not clean_number.startswith("+"):
-        # Default to US +1 if no country code
         digits = "".join(c for c in clean_number if c.isdigit())
         if len(digits) == 10:
             clean_number = f"+1{digits}"
@@ -155,27 +157,46 @@ async def send_sms(to_number: str, body: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════
-# UNIFIED NOTIFICATION DISPATCHER
+# UNIFIED NOTIFICATION DISPATCHER — MULTI-CHANNEL SUPPORT
 # ═══════════════════════════════════════════════════════════════
+
+def _parse_notif_pref(pref: str) -> list[str]:
+    """Parse comma-separated notif_pref into list of channels.
+    Returns empty list for 'none' (user opts out of notifications).
+    """
+    if not pref or pref.strip().lower() == "none":
+        return []
+    channels = [c.strip().lower() for c in pref.split(",") if c.strip()]
+    # Filter to valid channels only
+    return [c for c in channels if c in ("email", "sms")]
+
 
 async def send_notification(
     db: aiosqlite.Connection,
     player_id: int,
-    channel: str,
+    notif_pref: str,
     subject: str,
     body: str,
 ):
     """
-    Send a notification to a player via their preferred channel.
-    Always logs to the database. Delivers via SendGrid/Twilio if configured.
+    Send a notification to a player via ALL their preferred channels.
+    notif_pref is comma-separated (e.g. "email,sms"). "none" = no delivery.
+    Always logs to the database.
     """
-    # Log to notification_log table (always)
+    channels = _parse_notif_pref(notif_pref)
+
+    # Log to notification_log table (always, even if none)
+    channel_str = notif_pref or "none"
     await db.execute(
         """INSERT INTO notification_log (recipient_id, channel, subject, body)
            VALUES (?, ?, ?, ?)""",
-        (player_id, channel, subject, body),
+        (player_id, channel_str, subject, body),
     )
     await db.commit()
+
+    if not channels:
+        logger.info(f"📋 Player {player_id} has notifications set to 'none' — logged only")
+        return
 
     # Look up player contact info
     cursor = await db.execute(
@@ -186,37 +207,42 @@ async def send_notification(
         logger.warning(f"Player {player_id} not found for notification")
         return
 
-    delivered = False
+    any_delivered = False
 
-    if channel == "email":
-        if player["email"]:
-            delivered = await send_email(player["email"], subject, body)
-        else:
-            logger.warning(f"Player {player_id} has no email address")
+    for channel in channels:
+        if channel == "email":
+            if player["email"]:
+                delivered = await send_email(player["email"], subject, body)
+                any_delivered = any_delivered or delivered
+            else:
+                logger.warning(f"Player {player_id} has no email address")
 
-    elif channel == "sms":
-        if player["mobile"]:
-            delivered = await send_sms(player["mobile"], f"{subject}\n\n{body}")
-        else:
-            logger.warning(f"Player {player_id} has no mobile number")
+        elif channel == "sms":
+            if player["mobile"]:
+                delivered = await send_sms(player["mobile"], f"{subject}\n\n{body}")
+                any_delivered = any_delivered or delivered
+            else:
+                logger.warning(f"Player {player_id} has no mobile number")
 
-    elif channel == "push":
-        # Push notifications not yet implemented — fall back to email
-        logger.info(f"🔔 Push not implemented, falling back to email for player {player_id}")
-        if player["email"]:
-            delivered = await send_email(player["email"], subject, body)
-
-    else:
-        logger.warning(f"Unknown channel '{channel}' for player {player_id}")
-
-    if not delivered:
+    if not any_delivered:
         logger.info(f"📋 Notification logged (not delivered) — player {player_id}: {subject}")
 
 
 # ═══════════════════════════════════════════════════════════════
 # HIGH-LEVEL NOTIFICATION FUNCTIONS
-# (unchanged interface — used by the rest of the app)
 # ═══════════════════════════════════════════════════════════════
+
+def _format_game_date(game_date: str):
+    """Format a game date string for display. Returns (nice_date, day, time)."""
+    try:
+        d = datetime.fromisoformat(game_date)
+        nice_date = d.strftime("%A, %B %d at %I:%M %p")
+        day = d.strftime("%A")
+        time_str = d.strftime("%I:%M %p").lstrip("0")
+        return nice_date, day, time_str
+    except Exception:
+        return game_date, game_date, ""
+
 
 async def notify_game_signup_open(
     db: aiosqlite.Connection,
@@ -226,17 +252,7 @@ async def notify_game_signup_open(
     game_location: str,
 ):
     """Notify a batch of players that signup is open for a game."""
-    # Format the date nicely
-    try:
-        from datetime import datetime as dt
-        d = dt.fromisoformat(game_date)
-        nice_date = d.strftime("%A, %B %d at %I:%M %p")
-        subject_day = d.strftime("%A")
-        subject_time = d.strftime("%I:%M %p").lstrip("0")
-    except Exception:
-        nice_date = game_date
-        subject_day = game_date
-        subject_time = ""
+    nice_date, subject_day, subject_time = _format_game_date(game_date)
 
     for pid in player_ids:
         cursor = await db.execute(
@@ -245,8 +261,8 @@ async def notify_game_signup_open(
         row = await cursor.fetchone()
         if not row:
             continue
-        channel = row["notif_pref"]
-        subject = f"GOATCOMMISH - New Game {subject_day} {subject_time}@{game_location}"
+        notif_pref = row["notif_pref"]
+        subject = f"GOATcommish - New Game {subject_day} {subject_time}@{game_location}"
         body = (
             f"Signup is open for pickup basketball!\n\n"
             f"📍 {game_location}\n"
@@ -254,13 +270,61 @@ async def notify_game_signup_open(
             f"Open the app to sign up before spots fill:\n"
             f"https://www.goatcommish.com"
         )
-        await send_notification(db, pid, channel, subject, body)
+        await send_notification(db, pid, notif_pref, subject, body)
         await db.execute(
             """INSERT INTO game_notifications
                (game_id, player_id, notification_type, channel, message, delivered)
                VALUES (?, ?, 'signup_open', ?, ?, 1)""",
-            (game_id, pid, channel, body),
+            (game_id, pid, notif_pref, body),
         )
+    await db.commit()
+
+
+async def notify_batch_games_signup_open(
+    db: aiosqlite.Connection,
+    game_infos: list[dict],
+    player_ids: list[int],
+):
+    """Notify players about multiple games in a single notification.
+    game_infos: list of dicts with keys: id, date, location
+    """
+    if not game_infos:
+        return
+
+    # Build the combined game list
+    game_lines = []
+    for g in game_infos:
+        nice_date, _, _ = _format_game_date(g["date"])
+        game_lines.append(f"📍 {g['location']} — 🕐 {nice_date}")
+
+    game_list_text = "\n".join(game_lines)
+    n = len(game_infos)
+    subject = f"GOATcommish - {n} New Game{'s' if n > 1 else ''} This Week"
+
+    body = (
+        f"{n} new game{'s have' if n > 1 else ' has'} been posted!\n\n"
+        f"{game_list_text}\n\n"
+        f"Open the app to sign up before spots fill:\n"
+        f"https://www.goatcommish.com"
+    )
+
+    for pid in player_ids:
+        cursor = await db.execute(
+            "SELECT notif_pref FROM players WHERE id = ?", (pid,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            continue
+        notif_pref = row["notif_pref"]
+        await send_notification(db, pid, notif_pref, subject, body)
+        # Log against first game in batch
+        for g in game_infos:
+            await db.execute(
+                """INSERT INTO game_notifications
+                   (game_id, player_id, notification_type, channel, message, delivered)
+                   VALUES (?, ?, 'signup_open', ?, ?, 1)""",
+                (g["id"], pid, notif_pref, body),
+            )
     await db.commit()
 
 
@@ -280,13 +344,13 @@ async def notify_selection_results(
             continue
         await send_notification(
             db, pid, row["notif_pref"],
-            "🏀 You're In!",
-            "Great news — you've been selected for the game!\n\nSee you on the court.",
+            "🏀 You're IN!",
+            "You've been selected to play! See you on the court.",
         )
 
-    for entry in waitlist_players:
-        pid = entry["player_id"]
-        pos = entry["position"]
+    for wp in waitlist_players:
+        pid = wp["player_id"]
+        position = wp.get("position", "?")
         cursor = await db.execute(
             "SELECT notif_pref FROM players WHERE id = ?", (pid,)
         )
@@ -295,8 +359,8 @@ async def notify_selection_results(
             continue
         await send_notification(
             db, pid, row["notif_pref"],
-            "🏀 Waitlisted",
-            f"You're #{pos} on the waitlist.\n\nWe'll notify you right away if a spot opens up.",
+            "📋 Waitlisted",
+            f"You're #{position} on the waitlist. We'll notify you if a spot opens up.",
         )
 
 
@@ -305,7 +369,7 @@ async def notify_waitlist_promotion(
     game_id: int,
     player_id: int,
 ):
-    """Notify a player they've been promoted from waitlist to the game."""
+    """Notify a player they've been promoted from waitlist."""
     cursor = await db.execute(
         "SELECT notif_pref FROM players WHERE id = ?", (player_id,)
     )
@@ -314,8 +378,8 @@ async def notify_waitlist_promotion(
         return
     await send_notification(
         db, player_id, row["notif_pref"],
-        "🏀 You're In!",
-        "A spot opened up and you've been moved into the game!\n\nSee you on the court.",
+        "🎉 Spot Opened — You're IN!",
+        "A spot opened up and you've been moved in. See you on the court!",
     )
     await db.execute(
         """INSERT INTO game_notifications
@@ -332,7 +396,7 @@ async def notify_owner_player_drop(
     player_name: str,
     drop_time: str,
 ):
-    """Notify all owners that a player dropped from a game."""
+    """Notify organizers that a player dropped from a game."""
     cursor = await db.execute(
         "SELECT id, notif_pref FROM players WHERE role = 'owner' AND status = 'approved'"
     )
@@ -350,7 +414,7 @@ async def notify_owners_new_signup(
     player_name: str,
     player_email: str,
 ):
-    """Notify owners about a new player registration."""
+    """Notify organizers about a new player registration."""
     cursor = await db.execute(
         "SELECT id, notif_pref FROM players WHERE role = 'owner' AND status = 'approved'"
     )
@@ -372,17 +436,9 @@ async def notify_game_cancelled(
     game_date: str,
     game_location: str,
 ):
-    """Notify all signed-up players that a game has been cancelled."""
-    try:
-        from datetime import datetime as dt
-        d = dt.fromisoformat(game_date)
-        weekday = d.strftime("%A")
-        nice_date = d.strftime("%B %d")
-    except Exception:
-        weekday = ""
-        nice_date = game_date
-
-    subject = f"{weekday} game on {nice_date} at {game_location} has been cancelled"
+    """Notify players that a game has been cancelled."""
+    nice_date, weekday, _ = _format_game_date(game_date)
+    subject = f"❌ Game Cancelled — {weekday}"
 
     for pid in player_ids:
         cursor = await db.execute(
@@ -391,14 +447,45 @@ async def notify_game_cancelled(
         row = await cursor.fetchone()
         if not row:
             continue
-        channel = row["notif_pref"]
+        notif_pref = row["notif_pref"]
         body = (
             f"The {weekday} game has been cancelled.\n\n"
             f"📍 {game_location}\n"
             f"🕐 {weekday}, {nice_date}\n\n"
             f"We'll let you know when the next game is scheduled."
         )
-        await send_notification(db, pid, channel, subject, body)
+        await send_notification(db, pid, notif_pref, subject, body)
+
+
+async def notify_game_edited(
+    db: aiosqlite.Connection,
+    game_id: int,
+    player_ids: list[int],
+    changes: str,
+    new_date: str,
+    new_location: str,
+):
+    """Notify players that a game has been updated."""
+    nice_date, weekday, time_str = _format_game_date(new_date)
+    subject = f"📝 Game Updated — {weekday}"
+
+    for pid in player_ids:
+        cursor = await db.execute(
+            "SELECT notif_pref FROM players WHERE id = ?", (pid,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            continue
+        notif_pref = row["notif_pref"]
+        body = (
+            f"A game you signed up for has been updated.\n\n"
+            f"{changes}\n\n"
+            f"📍 {new_location}\n"
+            f"🕐 {nice_date}\n\n"
+            f"Open the app to review:\n"
+            f"https://www.goatcommish.com"
+        )
+        await send_notification(db, pid, notif_pref, subject, body)
 
 
 # ═══════════════════════════════════════════════════════════════

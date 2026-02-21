@@ -7,6 +7,7 @@ import csv
 import io
 import os
 import asyncio
+import uuid
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 
@@ -37,17 +38,24 @@ from app.models import (
     PlayerAdminUpdate,
     GameCreate,
     GameOut,
+    GameUpdate,
+    BatchGameCreate,
     SignupOut,
     SettingsOut,
     SettingsUpdate,
     LocationCreate,
+    LocationOut,
+    LocationUpdate,
+    LocationReorder,
 )
 from app.algorithms import run_random_selection
 from app.notifications import (
     notify_game_signup_open,
+    notify_batch_games_signup_open,
     notify_waitlist_promotion,
     notify_owner_player_drop,
     notify_owners_new_signup,
+    notify_game_edited,
     log_notification_config,
 )
 from app.security import (
@@ -62,7 +70,7 @@ from app.security import (
     sanitize_string,
     get_client_ip,
 )
-from app.scheduler import scheduler, schedule_game_notifications
+from app.scheduler import scheduler, schedule_game_notifications, Scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("hoops")
@@ -108,7 +116,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="GOATCOMMISH — Pickup Basketball",
+    title="GOATcommish — Pickup Basketball",
     version="2.0.0",
     lifespan=lifespan,
     docs_url="/docs" if DEMO_MODE else None,     # Disable Swagger in production
@@ -151,6 +159,22 @@ async def get_player_or_404(db, player_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Player not found")
     return row
+
+
+def validate_notif_pref(pref: str) -> str:
+    """Validate and normalize notif_pref. Returns cleaned value.
+    Valid: 'email', 'sms', 'email,sms', 'none'
+    """
+    if not pref:
+        return "email"
+    pref = pref.strip().lower()
+    if pref == "none":
+        return "none"
+    parts = [p.strip() for p in pref.split(",") if p.strip()]
+    valid = [p for p in parts if p in ("email", "sms")]
+    if not valid:
+        return "email"
+    return ",".join(sorted(set(valid)))
 
 
 # ── Demo Data Seed ────────────────────────────────────────────
@@ -323,7 +347,7 @@ async def register(req: PlayerCreate, request: Request):
             raise HTTPException(status_code=400, detail="Email already registered")
 
         pw_hash = hash_password(req.password)
-        notif_pref = req.notif_pref if req.notif_pref in ("email", "sms", "push") else "email"
+        notif_pref = validate_notif_pref(req.notif_pref)
 
         cursor = await db.execute(
             """INSERT INTO players (name, email, mobile, password_hash, notif_pref)
@@ -399,18 +423,23 @@ async def request_password_reset(email: str = Query(...)):
         base_url = os.environ.get("HOOPS_BASE_URL", "http://142.93.13.21")
         reset_link = f"{base_url}?reset={token}"
 
-        # Send via preferred channel
-        from app.notifications import send_email, send_sms
-        subject = "GOATCOMMISH — Password Reset"
+        # Send via preferred channels
+        from app.notifications import send_email, send_sms, _parse_notif_pref
+        subject = "GOATcommish — Password Reset"
         body = f"Click this link to reset your password (expires in 1 hour):\n\n{reset_link}\n\nIf you didn't request this, you can ignore this email."
 
-        if player["notif_pref"] == "sms" and player["mobile"]:
-            asyncio.create_task(send_sms(
-                player["mobile"],
-                f"GOATCOMMISH password reset:\n{reset_link}\n\nExpires in 1 hour."
-            ))
-        else:
-            asyncio.create_task(send_email(player["email"], subject, body))
+        channels = _parse_notif_pref(player["notif_pref"])
+        # For password reset, always send via email even if pref is "none" or "sms"
+        if not channels or "email" not in channels:
+            channels = ["email"]
+        for ch in channels:
+            if ch == "sms" and player["mobile"]:
+                asyncio.create_task(send_sms(
+                    player["mobile"],
+                    f"GOATcommish password reset:\n{reset_link}\n\nExpires in 1 hour."
+                ))
+            elif ch == "email":
+                asyncio.create_task(send_email(player["email"], subject, body))
 
         return {"message": "If an account with that email exists, a reset link has been sent."}
     finally:
@@ -504,10 +533,8 @@ async def update_me(req: PlayerUpdate, player_id: int = Depends(get_current_play
             # Clear forced password change flag
             updates.append("force_password_change = 0")
         if req.notif_pref is not None:
-            if req.notif_pref not in ("email", "sms", "push"):
-                raise HTTPException(400, "Invalid notification preference")
             updates.append("notif_pref = ?")
-            params.append(req.notif_pref)
+            params.append(validate_notif_pref(req.notif_pref))
 
         if updates:
             updates.append("updated_at = ?")
@@ -810,6 +837,7 @@ async def list_games(player_id: int = Depends(get_current_player_id)):
                 notified_at=g_dict.get("notified_at"), phase=g_dict["phase"],
                 selection_done=bool(g_dict["selection_done"]),
                 closed=bool(g_dict["closed"]), signups=signups,
+                batch_id=g_dict.get("batch_id"),
                 auto_selection_at=sel_job.get("scheduled_at") if sel_job.get("status") == "pending" else None,
                 notify_standard_at=std_job.get("scheduled_at"),
                 notify_low_at=low_job.get("scheduled_at"),
@@ -886,6 +914,192 @@ async def _schedule_game_notifications_bg(game_id, notify_future_at):
         await schedule_game_notifications(game_id, notify_future_at)
     except Exception as e:
         logger.error(f"Background notification error for game {game_id}: {e}")
+
+
+@app.post("/api/games/batch")
+async def create_batch_games(req: BatchGameCreate, owner_id: int = Depends(require_owner)):
+    """Create multiple games at once with a single batch notification.
+    All games share a batch_id and their cascade jobs fire together.
+    """
+    batch_id = str(uuid.uuid4())[:12]
+    created_games = []
+
+    db = await get_db()
+    try:
+        for game_req in req.games:
+            if game_req.algorithm not in ("first_come", "random", "weighted"):
+                raise HTTPException(400, f"Invalid algorithm: {game_req.algorithm}")
+            try:
+                datetime.fromisoformat(game_req.date)
+            except ValueError:
+                raise HTTPException(400, f"Invalid date format: {game_req.date}")
+
+            location = sanitize_string(game_req.location, 200)
+
+            # All batch games start in 'created' phase — they'll be notified together
+            cursor = await db.execute(
+                """INSERT INTO games (date, location, algorithm, cap, cap_enabled, created_by,
+                                      phase, selection_done, batch_id)
+                   VALUES (?, ?, ?, ?, ?, ?, 'created', ?, ?)""",
+                (
+                    game_req.date, location, game_req.algorithm, game_req.cap,
+                    1 if game_req.cap_enabled else 0, owner_id,
+                    1 if game_req.algorithm == "first_come" else 0,
+                    batch_id,
+                ),
+            )
+            game_id = cursor.lastrowid
+
+            # Add owner-selected players
+            for pid in game_req.owner_added_player_ids:
+                cursor2 = await db.execute(
+                    "SELECT id FROM players WHERE id = ? AND status = 'approved'", (pid,)
+                )
+                if not await cursor2.fetchone():
+                    continue
+                initial_status = "in" if game_req.algorithm == "first_come" else "pending"
+                await db.execute(
+                    """INSERT OR IGNORE INTO game_signups (game_id, player_id, status, owner_added)
+                       VALUES (?, ?, ?, 1)""",
+                    (game_id, pid, initial_status),
+                )
+
+            created_games.append({
+                "id": game_id,
+                "date": game_req.date,
+                "location": location,
+            })
+
+        await db.commit()
+
+        # Schedule batch notifications in background
+        asyncio.create_task(_schedule_batch_notifications_bg(batch_id, created_games))
+
+        # Return all created games
+        result = []
+        for g in created_games:
+            result.append(await _get_game_out(db, g["id"]))
+        return result
+    finally:
+        await db.close()
+
+
+async def _schedule_batch_notifications_bg(batch_id, game_infos):
+    """Send a single batch notification for all games, then schedule cascade for each."""
+    try:
+        db = await get_db()
+        try:
+            now = datetime.now(timezone.utc)
+
+            # Get all high-priority players
+            cursor = await db.execute(
+                "SELECT id FROM players WHERE status = 'approved' AND priority = 'high'"
+            )
+            high_players = [r["id"] for r in await cursor.fetchall()]
+
+            # Send one combined notification
+            if high_players:
+                await notify_batch_games_signup_open(db, game_infos, high_players)
+
+            # Update all batch games and schedule cascade
+            for g in game_infos:
+                await db.execute(
+                    """UPDATE games SET notified_at = ?, phase = 'notifying_high'
+                       WHERE id = ?""",
+                    (now.isoformat(), g["id"]),
+                )
+                s = Scheduler()
+                await s._schedule_cascade_jobs(db, g["id"], now.isoformat())
+
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.error(f"Batch notification error for batch {batch_id}: {e}")
+
+
+@app.patch("/api/games/{game_id}")
+async def edit_game(game_id: int, req: GameUpdate, owner_id: int = Depends(require_owner)):
+    """Edit an existing game's time and/or location. Notifies signed-up players."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM games WHERE id = ?", (game_id,))
+        game = await cursor.fetchone()
+        if not game:
+            raise HTTPException(404, "Game not found")
+        if game["closed"]:
+            raise HTTPException(400, "Cannot edit a closed game")
+
+        updates = []
+        params = []
+        changes = []
+
+        if req.date is not None:
+            try:
+                datetime.fromisoformat(req.date)
+            except ValueError:
+                raise HTTPException(400, "Invalid date format")
+            old_nice, _, _ = _format_game_date_helper(game["date"])
+            new_nice, _, _ = _format_game_date_helper(req.date)
+            updates.append("date = ?")
+            params.append(req.date)
+            changes.append(f"🕐 Time changed: {old_nice} → {new_nice}")
+
+        if req.location is not None:
+            loc = sanitize_string(req.location, 200)
+            updates.append("location = ?")
+            params.append(loc)
+            changes.append(f"📍 Location changed: {game['location']} → {loc}")
+
+        if not updates:
+            raise HTTPException(400, "No changes provided")
+
+        params.append(game_id)
+        await db.execute(
+            f"UPDATE games SET {', '.join(updates)} WHERE id = ?", params
+        )
+        await db.commit()
+
+        # Notify signed-up players of the change
+        cursor2 = await db.execute(
+            "SELECT player_id FROM game_signups WHERE game_id = ?", (game_id,)
+        )
+        player_ids = [r["player_id"] for r in await cursor2.fetchall()]
+        if player_ids:
+            new_date = req.date or game["date"]
+            new_loc = req.location or game["location"]
+            change_text = "\n".join(changes)
+            asyncio.create_task(_send_edit_notifications(
+                game_id, player_ids, change_text, new_date, new_loc
+            ))
+
+        return await _get_game_out(db, game_id)
+    finally:
+        await db.close()
+
+
+def _format_game_date_helper(game_date: str):
+    """Helper to format game date for change descriptions."""
+    try:
+        d = datetime.fromisoformat(game_date)
+        nice = d.strftime("%A, %B %d at %I:%M %p")
+        day = d.strftime("%A")
+        time_str = d.strftime("%I:%M %p").lstrip("0")
+        return nice, day, time_str
+    except Exception:
+        return game_date, game_date, ""
+
+
+async def _send_edit_notifications(game_id, player_ids, changes, new_date, new_location):
+    """Background task to send edit notifications."""
+    try:
+        db = await get_db()
+        try:
+            await notify_game_edited(db, game_id, player_ids, changes, new_date, new_location)
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.error(f"Edit notification error for game {game_id}: {e}")
 
 
 @app.post("/api/games/{game_id}/signup")
@@ -1123,6 +1337,7 @@ async def _get_game_out(db, game_id: int) -> GameOut:
         created_by=g["created_by"], created_at=str(g["created_at"]),
         notified_at=g.get("notified_at"), phase=g["phase"],
         selection_done=bool(g["selection_done"]), closed=bool(g["closed"]),
+        batch_id=g.get("batch_id"),
         auto_selection_at=sel_job.get("scheduled_at") if sel_job.get("status") == "pending" else None,
         notify_standard_at=std_job.get("scheduled_at"),
         notify_low_at=low_job.get("scheduled_at"),
@@ -1149,12 +1364,18 @@ async def get_settings(owner_id: int = Depends(require_owner)):
     try:
         cursor = await db.execute("SELECT * FROM settings")
         s = {r["key"]: r["value"] for r in await cursor.fetchall()}
-        cursor = await db.execute("SELECT name FROM locations ORDER BY name")
-        locs = [r["name"] for r in await cursor.fetchall()]
+        cursor = await db.execute(
+            "SELECT id, name, address, sort_order FROM locations ORDER BY sort_order ASC, name ASC"
+        )
+        locs = [
+            LocationOut(id=r["id"], name=r["name"], address=r["address"] or "", sort_order=r["sort_order"])
+            for r in await cursor.fetchall()
+        ]
         return SettingsOut(
             default_cap=int(s.get("default_cap", 12)),
             cap_enabled=s.get("cap_enabled", "1") == "1",
             default_algorithm=s.get("default_algorithm", "first_come"),
+            default_location=s.get("default_location", ""),
             high_priority_delay_minutes=int(s.get("high_priority_delay_minutes", 60)),
             alternative_delay_minutes=int(s.get("alternative_delay_minutes", 1440)),
             random_wait_period_minutes=int(s.get("random_wait_period_minutes", 60)),
@@ -1173,6 +1394,7 @@ async def update_settings(req: SettingsUpdate, owner_id: int = Depends(require_o
             "default_cap": str(req.default_cap) if req.default_cap is not None else None,
             "cap_enabled": ("1" if req.cap_enabled else "0") if req.cap_enabled is not None else None,
             "default_algorithm": req.default_algorithm if req.default_algorithm in ("first_come", "random", "weighted") else None,
+            "default_location": req.default_location if req.default_location is not None else None,
             "high_priority_delay_minutes": str(req.high_priority_delay_minutes) if req.high_priority_delay_minutes is not None else None,
             "alternative_delay_minutes": str(req.alternative_delay_minutes) if req.alternative_delay_minutes is not None else None,
             "random_wait_period_minutes": str(req.random_wait_period_minutes) if req.random_wait_period_minutes is not None else None,
@@ -1190,18 +1412,63 @@ async def update_settings(req: SettingsUpdate, owner_id: int = Depends(require_o
 async def add_location(req: LocationCreate, owner_id: int = Depends(require_owner)):
     db = await get_db()
     try:
-        await db.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (sanitize_string(req.name, 200),))
+        # Get next sort_order
+        cursor = await db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order FROM locations")
+        row = await cursor.fetchone()
+        next_order = row["next_order"]
+        await db.execute(
+            "INSERT OR IGNORE INTO locations (name, address, sort_order) VALUES (?, ?, ?)",
+            (sanitize_string(req.name, 200), sanitize_string(req.address, 500), next_order),
+        )
         await db.commit()
         return {"message": "Location added"}
     finally:
         await db.close()
 
 
-@app.delete("/api/settings/locations/{name}")
-async def remove_location(name: str, owner_id: int = Depends(require_owner)):
+@app.patch("/api/settings/locations/{loc_id}")
+async def update_location(loc_id: int, req: LocationUpdate, owner_id: int = Depends(require_owner)):
     db = await get_db()
     try:
-        await db.execute("DELETE FROM locations WHERE name = ?", (name,))
+        cursor = await db.execute("SELECT * FROM locations WHERE id = ?", (loc_id,))
+        if not await cursor.fetchone():
+            raise HTTPException(404, "Location not found")
+        updates = []
+        params = []
+        if req.name is not None:
+            updates.append("name = ?")
+            params.append(sanitize_string(req.name, 200))
+        if req.address is not None:
+            updates.append("address = ?")
+            params.append(sanitize_string(req.address, 500))
+        if updates:
+            params.append(loc_id)
+            await db.execute(f"UPDATE locations SET {', '.join(updates)} WHERE id = ?", params)
+            await db.commit()
+        return {"message": "Location updated"}
+    finally:
+        await db.close()
+
+
+@app.post("/api/settings/locations/reorder")
+async def reorder_locations(req: LocationReorder, owner_id: int = Depends(require_owner)):
+    db = await get_db()
+    try:
+        for i, loc_id in enumerate(req.location_ids):
+            await db.execute(
+                "UPDATE locations SET sort_order = ? WHERE id = ?", (i, loc_id)
+            )
+        await db.commit()
+        return {"message": "Locations reordered"}
+    finally:
+        await db.close()
+
+
+@app.delete("/api/settings/locations/{loc_id}")
+async def remove_location(loc_id: int, owner_id: int = Depends(require_owner)):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM locations WHERE id = ?", (loc_id,))
         await db.commit()
         return {"message": "Location removed"}
     finally:
@@ -1212,8 +1479,13 @@ async def remove_location(name: str, owner_id: int = Depends(require_owner)):
 async def list_locations(player_id: int = Depends(get_current_player_id)):
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT name FROM locations ORDER BY name")
-        return [r["name"] for r in await cursor.fetchall()]
+        cursor = await db.execute(
+            "SELECT id, name, address, sort_order FROM locations ORDER BY sort_order ASC, name ASC"
+        )
+        return [
+            LocationOut(id=r["id"], name=r["name"], address=r["address"] or "", sort_order=r["sort_order"])
+            for r in await cursor.fetchall()
+        ]
     finally:
         await db.close()
 

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS players (
     role TEXT NOT NULL DEFAULT 'player' CHECK(role IN ('owner','player')),
     priority TEXT NOT NULL DEFAULT 'standard' CHECK(priority IN ('high','standard','low')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied')),
-    notif_pref TEXT NOT NULL DEFAULT 'email' CHECK(notif_pref IN ('email','sms','push')),
+    notif_pref TEXT NOT NULL DEFAULT 'email',
     force_password_change INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL
+    name TEXT UNIQUE NOT NULL,
+    address TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS games (
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS games (
                         'notifying_low','signup','active','closed','cancelled')),
     selection_done INTEGER DEFAULT 0,
     closed INTEGER DEFAULT 0,
+    batch_id TEXT,
     FOREIGN KEY (created_by) REFERENCES players(id)
 );
 
@@ -142,6 +145,7 @@ DEFAULT_SETTINGS = {
     "default_cap": "12",
     "cap_enabled": "1",
     "default_algorithm": "first_come",
+    "default_location": "",
     "high_priority_delay_minutes": "60",
     "alternative_delay_minutes": "1440",
     "random_wait_period_minutes": "60",
@@ -173,11 +177,34 @@ async def init_db():
     try:
         await db.executescript(SCHEMA)
 
-        # Migration: add force_password_change if missing
+        # ── Migrations for existing databases ──
+        # Players: force_password_change
         cursor = await db.execute("PRAGMA table_info(players)")
-        cols = {row["name"] for row in await cursor.fetchall()}
-        if "force_password_change" not in cols:
+        pcols = {row["name"] for row in await cursor.fetchall()}
+        if "force_password_change" not in pcols:
             await db.execute("ALTER TABLE players ADD COLUMN force_password_change INTEGER DEFAULT 0")
+
+        # Locations: address, sort_order
+        cursor = await db.execute("PRAGMA table_info(locations)")
+        lcols = {row["name"] for row in await cursor.fetchall()}
+        if "address" not in lcols:
+            await db.execute("ALTER TABLE locations ADD COLUMN address TEXT DEFAULT ''")
+        if "sort_order" not in lcols:
+            await db.execute("ALTER TABLE locations ADD COLUMN sort_order INTEGER DEFAULT 0")
+
+        # Games: batch_id
+        cursor = await db.execute("PRAGMA table_info(games)")
+        gcols = {row["name"] for row in await cursor.fetchall()}
+        if "batch_id" not in gcols:
+            await db.execute("ALTER TABLE games ADD COLUMN batch_id TEXT")
+
+        # Migrate notif_pref 'push' → 'email' for existing players
+        await db.execute("UPDATE players SET notif_pref = 'email' WHERE notif_pref = 'push'")
+
+        # Ensure default_location setting exists
+        cursor = await db.execute("SELECT 1 FROM settings WHERE key = 'default_location'")
+        if not await cursor.fetchone():
+            await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('default_location', '')")
 
         cursor = await db.execute("SELECT COUNT(*) as c FROM settings")
         row = await cursor.fetchone()
@@ -191,9 +218,10 @@ async def init_db():
         cursor = await db.execute("SELECT COUNT(*) as c FROM locations")
         row = await cursor.fetchone()
         if row["c"] == 0:
-            for loc in DEFAULT_LOCATIONS:
+            for i, loc in enumerate(DEFAULT_LOCATIONS):
                 await db.execute(
-                    "INSERT OR IGNORE INTO locations (name) VALUES (?)", (loc,)
+                    "INSERT OR IGNORE INTO locations (name, sort_order) VALUES (?, ?)",
+                    (loc, i),
                 )
 
         await db.commit()

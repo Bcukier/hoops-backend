@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" href="/static/favicon.png?v=2">
 <link rel="apple-touch-icon" href="/static/icon-192.png?v=2">
-<title>GOATCOMMISH — Pickup Basketball</title>
+<title>GOATcommish — Pickup Basketball</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -171,6 +171,8 @@ let cachedLocations = [];
 let cachedPendingCount = 0;
 
 let mgmtTab = 'pending';
+let rosterSort = 'priority'; // 'priority', 'first', 'last'
+let cgPlayerSort = 'priority'; // sort for game creation player list
 let gameRefreshTimer = null;
 let ownerViewMode = true;
 
@@ -182,6 +184,25 @@ function formatDate(iso) { const d = new Date(iso); return `${MONTHS[d.getMonth(
 function formatTime(iso) { const d = new Date(iso); let h=d.getHours(),m=d.getMinutes(); const ap=h>=12?'PM':'AM'; h=h%12||12; return `${h}:${m.toString().padStart(2,'0')} ${ap}`; }
 function formatWeekday(iso) { return DAYS[new Date(iso).getDay()]; }
 function isGameStarted(game) { return new Date(game.date).getTime() < Date.now(); }
+
+// Notification preference multi-select helpers
+function getNotifPref(prefix) {
+  const none = document.querySelector(`.${prefix}-notif-none`);
+  if (none && none.checked) return 'none';
+  const checked = [...document.querySelectorAll(`.${prefix}-notif-ch:checked`)].map(cb => cb.value);
+  return checked.length ? checked.join(',') : 'email';
+}
+function handleNotifCheckbox(el, prefix) {
+  if (el.checked) {
+    const none = document.querySelector(`.${prefix}-notif-none`);
+    if (none) none.checked = false;
+  }
+}
+function handleNotifNone(el, prefix) {
+  if (el.checked) {
+    document.querySelectorAll(`.${prefix}-notif-ch`).forEach(cb => cb.checked = false);
+  }
+}
 function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
 function showToast(msg, type='info') {
@@ -219,7 +240,7 @@ async function fetchPendingCount() {
 
 async function fetchSettings() {
   if (!isOwner()) return;
-  try { cachedSettings = await api('/settings'); cachedLocations = cachedSettings.locations; } catch(e) { console.error('fetchSettings:', e); }
+  try { cachedSettings = await api('/settings'); cachedLocations = cachedSettings.locations || []; } catch(e) { console.error('fetchSettings:', e); }
 }
 
 async function fetchLocations() {
@@ -228,11 +249,11 @@ async function fetchLocations() {
 
 async function loadPageData() {
   if (!currentUser) return;
-  const promises = [fetchGames()];
+  const promises = [fetchGames(), fetchLocations()];
   if (isOwner()) promises.push(fetchPendingCount());
   if (currentPage === 'player_mgmt') promises.push(fetchPlayers());
   if (currentPage === 'owner_settings') promises.push(fetchSettings());
-  if (currentPage === 'create_game') promises.push(fetchLocations(), fetchPlayers());
+  if (currentPage === 'create_game') promises.push(fetchPlayers(), fetchSettings());
   await Promise.all(promises);
 }
 
@@ -267,25 +288,25 @@ function renderNav() {
   const pc = cachedPendingCount;
   const pendingBadge = isOwner()&&pc>0 ? `<span style="background:var(--red);color:#fff;border-radius:50%;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">${pc}</span>` : '';
   return `<nav><div class="inner">
-    <div class="logo" onclick="navigate('games')"><img src="/static/icon-40.png?v=2" style="width:32px;height:32px;vertical-align:middle;"> GOATCOMMISH</div>
+    <div class="logo" onclick="navigate('games')"><img src="/static/icon-40.png?v=2" style="width:32px;height:32px;vertical-align:middle;"> GOATcommish</div>
     <div class="nav-links">
       <a onclick="navigate('games')" class="${currentPage==='games'?'active':''}">Games</a>
       ${isOwner()?`<a onclick="navigate('create_game')" class="${currentPage==='create_game'?'active':''}">Create Game</a>`:''}
       ${isOwner()?`<a onclick="navigate('player_mgmt')" class="${currentPage==='player_mgmt'?'active':''}">Players${pendingBadge}</a>`:''}
       <a onclick="navigate('player_settings')" class="${currentPage==='player_settings'?'active':''}">Settings</a>
-      ${isOwner()?`<a onclick="navigate('owner_settings')" class="${currentPage==='owner_settings'?'active':''}">Admin</a>`:''}
+      ${isOwner()?`<a onclick="navigate('owner_settings')" class="${currentPage==='owner_settings'?'active':''}">Organizer</a>`:''}
       <a onclick="doLogout()" style="color:var(--red)">Logout</a>
     </div>
     <button class="hamburger" onclick="toggleMobileMenu()">☰</button>
   </div></nav>
   <div class="mobile-menu ${mobileMenuOpen?'open':''}" onclick="closeMobileMenu(event)">
     <div class="mobile-menu-content">
-      <div class="logo" style="margin-bottom:20px;font-size:20px" onclick="navigate('games');mobileMenuOpen=false;"><img src="/static/icon-40.png?v=2" style="width:28px;height:28px;vertical-align:middle;"> GOATCOMMISH</div>
+      <div class="logo" style="margin-bottom:20px;font-size:20px" onclick="navigate('games');mobileMenuOpen=false;"><img src="/static/icon-40.png?v=2" style="width:28px;height:28px;vertical-align:middle;"> GOATcommish</div>
       <a onclick="navigate('games');mobileMenuOpen=false;" class="${currentPage==='games'?'active':''}">🎮 Games</a>
       ${isOwner()?`<a onclick="navigate('create_game');mobileMenuOpen=false;" class="${currentPage==='create_game'?'active':''}">➕ Create Game</a>`:''}
       ${isOwner()?`<a onclick="navigate('player_mgmt');mobileMenuOpen=false;" class="${currentPage==='player_mgmt'?'active':''}">👥 Players${pendingBadge}</a>`:''}
       <a onclick="navigate('player_settings');mobileMenuOpen=false;" class="${currentPage==='player_settings'?'active':''}">⚙ Settings</a>
-      ${isOwner()?`<a onclick="navigate('owner_settings');mobileMenuOpen=false;" class="${currentPage==='owner_settings'?'active':''}">🔧 Admin</a>`:''}
+      ${isOwner()?`<a onclick="navigate('owner_settings');mobileMenuOpen=false;" class="${currentPage==='owner_settings'?'active':''}">🔧 Organizer</a>`:''}
       <a onclick="doLogout()" style="color:var(--red)">🚪 Logout</a>
     </div>
   </div>`;
@@ -427,16 +448,18 @@ function renderNewSignup() {
   return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
     <div class="card glow-border fade-in" style="max-width:420px;width:100%;text-align:center;">
       <h2 style="font-size:24px;font-weight:800;margin-bottom:4px;">Join the Run</h2>
-      <p style="color:var(--text2);font-size:13px;margin-bottom:24px;">Sign up to play pickup basketball. An admin will approve your account.</p>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:24px;">Sign up to play pickup basketball. An organizer will review your account.</p>
       <div style="text-align:left;">
         <label>Full Name</label><input id="su-name" placeholder="Your name" style="margin-bottom:12px;">
         <label>Email</label><input type="email" id="su-email" placeholder="you@example.com" style="margin-bottom:12px;">
         <label>Mobile Phone</label><input type="tel" id="su-mobile" placeholder="555-0123" style="margin-bottom:12px;">
         <label>Password</label><input type="password" id="su-pass" placeholder="Choose a password" style="margin-bottom:12px;">
         <label>Notification Preference</label>
-        <select id="su-notif" style="margin-bottom:20px;">
-          <option value="email">Email</option><option value="sms">SMS</option><option value="push">Push Notification</option>
-        </select>
+        <div id="su-notif-group" style="display:flex;gap:16px;flex-wrap:wrap;padding:4px 0;margin-bottom:20px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;"><input type="checkbox" class="su-notif-ch" value="email" checked style="width:auto;" onchange="handleNotifCheckbox(this,'su')"> Email</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;"><input type="checkbox" class="su-notif-ch" value="sms" style="width:auto;" onchange="handleNotifCheckbox(this,'su')"> SMS</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;"><input type="checkbox" class="su-notif-none" value="none" style="width:auto;" onchange="handleNotifNone(this,'su')"> None</label>
+        </div>
         <button class="btn-primary" id="su-btn" style="width:100%;padding:12px;" onclick="doSignup()">Request to Join</button>
       </div>
       <p style="margin-top:16px;font-size:13px;"><a style="color:var(--orange);cursor:pointer;" onclick="navigate('login')">← Back to login</a></p>
@@ -447,12 +470,12 @@ function renderNewSignup() {
 async function doSignup() {
   const name=document.getElementById('su-name').value.trim(), email=document.getElementById('su-email').value.trim();
   const mobile=document.getElementById('su-mobile').value.trim(), pass=document.getElementById('su-pass').value;
-  const notif=document.getElementById('su-notif').value;
+  const notif=getNotifPref('su');
   if(!name||!email||!pass) { showToast('Fill in all required fields','error'); return; }
   const btn=document.getElementById('su-btn'); btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
   try {
     await api('/auth/register', { method:'POST', body:JSON.stringify({name,email,mobile,password:pass,notif_pref:notif}) });
-    showToast('Sign up submitted! An admin will review.','success');
+    showToast('Sign up submitted! An organizer will review.','success');
     setTimeout(()=>navigate('login'), 1500);
   } catch(e) { showToast(e.message,'error'); btn.disabled=false; btn.textContent='Request to Join'; }
 }
@@ -464,12 +487,12 @@ function renderGames() {
   if (!games.length) return `<div class="fade-in" style="text-align:center;padding:60px 20px;">
     <div style="font-size:64px;margin-bottom:16px;"><img src="/static/icon-192.png?v=2" style="width:80px;height:80px;"></div>
     <h2 style="font-weight:700;margin-bottom:8px;">No Games Available</h2>
-    <p style="color:var(--text2);font-size:14px;">Check back later or ask an admin to create a game.</p></div>`;
+    <p style="color:var(--text2);font-size:14px;">Check back later or ask an organizer to create a game.</p></div>`;
 
   const viewToggle = isOwner() ? `<div style="display:flex;align-items:center;gap:8px;">
     <span style="font-size:12px;color:${ownerViewMode?'var(--text2)':'var(--orange)'};cursor:pointer;" onclick="ownerViewMode=false;render()">Player</span>
     <label class="toggle" style="margin:0;"><input type="checkbox" ${ownerViewMode?'checked':''} onchange="ownerViewMode=this.checked;render()"><span class="slider"></span></label>
-    <span style="font-size:12px;color:${ownerViewMode?'var(--orange)':'var(--text2)'};cursor:pointer;" onclick="ownerViewMode=true;render()">Owner</span>
+    <span style="font-size:12px;color:${ownerViewMode?'var(--orange)':'var(--text2)'};cursor:pointer;" onclick="ownerViewMode=true;render()">Organizer</span>
   </div>` : '';
 
   return `<div class="fade-in">
@@ -561,14 +584,28 @@ function renderGameColumn(game) {
       <button class="btn-danger btn-sm" style="font-size:11px;" onclick="cancelGame(${game.id})">Cancel</button></div>`;
   }
 
+  // Find location address from cachedLocations
+  const locObj = cachedLocations.find(l => l.name === game.location);
+  const locAddr = locObj && locObj.address ? locObj.address : '';
+  const locDisplay = locAddr
+    ? `<span style="cursor:pointer;text-decoration:underline dotted;position:relative;" title="${esc(locAddr)}" onclick="alert('📍 ${esc(locAddr)}')">${esc(game.location)}</span>`
+    : esc(game.location);
+
+  // Edit button for organizers
+  let editBtn = '';
+  if (isOwner() && ownerViewMode && !game.closed && !started) {
+    editBtn = `<button class="btn-secondary btn-sm" style="font-size:11px;" onclick="showEditGame(${game.id})">✏️ Edit</button>`;
+  }
+
   return `<div class="game-col slide-in">
     <div class="game-header">
       <div class="weekday">${formatWeekday(game.date)}</div>
       <div class="date">${formatDate(game.date)}</div>
-      <div class="time-loc">${formatTime(game.date)} · ${esc(game.location)}</div>
+      <div class="time-loc">${formatTime(game.date)} · ${locDisplay}</div>
       <div class="cap">Max: ${cap} · ${algLabel}</div>${statusBadge}
     </div>
     <div class="game-action">${actionBtn}</div>${ownerCtrl}
+    ${editBtn ? `<div style="padding:0 16px 8px;">${editBtn}</div>` : ''}
     <div class="game-players">${playerList || '<div style="text-align:center;padding:20px;color:var(--text2);font-size:13px;">No signups yet</div>'}</div>
   </div>`;
 }
@@ -610,31 +647,86 @@ async function cancelGame(gameId) {
   catch(e) { showToast(e.message,'error'); }
 }
 
+function showEditGame(gameId) {
+  const game = cachedGames.find(g => g.id === gameId);
+  if (!game) return;
+  const pad = n => String(n).padStart(2,'0');
+  const d = new Date(game.date);
+  const dtVal = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const locOptions = cachedLocations.map(l=>{
+    const sel = l.name === game.location ? 'selected' : '';
+    return `<option value="${esc(l.name)}" ${sel}>${esc(l.name)}</option>`;
+  }).join('') + `<option value="other">Other...</option>`;
+
+  const html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;" id="edit-game-modal" onclick="if(event.target===this)this.remove()">
+    <div class="card" style="max-width:400px;width:100%;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Edit Game</h3>
+    <div style="display:grid;gap:12px;">
+      <div><label>Date &amp; Time</label><input type="datetime-local" id="eg-datetime" value="${dtVal}"></div>
+      <div><label>Location</label><select id="eg-location">${locOptions}</select></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-primary" style="flex:1;" onclick="editGame(${gameId})">Save Changes</button>
+        <button class="btn-secondary" onclick="document.getElementById('edit-game-modal').remove()">Cancel</button>
+      </div>
+    </div></div></div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function editGame(gameId) {
+  const dt = document.getElementById('eg-datetime').value;
+  const gameDate = dt.length === 16 ? dt + ':00' : dt;
+  const location = document.getElementById('eg-location').value;
+  const body = {};
+  const game = cachedGames.find(g => g.id === gameId);
+  if (gameDate && gameDate !== game.date) body.date = gameDate;
+  if (location && location !== 'other' && location !== game.location) body.location = location;
+  if (!Object.keys(body).length) { showToast('No changes made','info'); return; }
+  try {
+    await api(`/games/${gameId}`, {method:'PATCH', body:JSON.stringify(body)});
+    showToast('Game updated — players notified','success');
+    document.getElementById('edit-game-modal')?.remove();
+    await fetchGames(); render();
+  } catch(e) { showToast(e.message,'error'); }
+}
+
 // ═══ CREATE GAME ═════════════════════════════════════════════
 function renderCreateGame() {
   if (!isOwner()) return '<p>Access denied.</p>';
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1);
   tomorrow.setHours(18,0,0,0);
-  // datetime-local needs YYYY-MM-DDTHH:MM format
   const pad = n => String(n).padStart(2,'0');
   const defaultDT = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth()+1)}-${pad(tomorrow.getDate())}T${pad(tomorrow.getHours())}:${pad(tomorrow.getMinutes())}`;
   const defaultNotifyDT = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth()+1)}-${pad(tomorrow.getDate())}T12:00`;
   const defAlg = cachedSettings?.default_algorithm || 'first_come';
+  const defLoc = cachedSettings?.default_location || '';
   const defCap = cachedSettings?.default_cap || 12;
   const defCapOn = cachedSettings?.cap_enabled !== false;
 
-  const locOptions = cachedLocations.map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  const locOptions = cachedLocations.map(l=>{
+    const sel = l.name === defLoc ? 'selected' : '';
+    return `<option value="${esc(l.name)}" ${sel}>${esc(l.name)}</option>`;
+  }).join('');
+
   const approvedPlayers = cachedPlayers.filter(p=>p.status==='approved');
-  const playerCheckboxes = approvedPlayers.map(p=>
-    `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;"><input type="checkbox" class="owner-add-player" value="${p.id}" style="width:auto;"> ${esc(p.name)}</label>`
-  ).join('');
+  const sorted = sortPlayers(approvedPlayers, cgPlayerSort);
+  const playerCheckboxes = sorted.map(p=>{
+    const prioLabel = p.priority !== 'standard' ? ` <span style="font-size:11px;opacity:0.5;">(${p.priority})</span>` : '';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;"><input type="checkbox" class="owner-add-player" value="${p.id}" style="width:auto;"> ${esc(p.name)}${prioLabel}</label>`;
+  }).join('');
 
   return `<div class="fade-in" style="max-width:600px;">
     <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">Create Game</h2>
     <div class="card"><div style="display:grid;gap:16px;">
-      <div><label>Game Date &amp; Time</label><input type="datetime-local" id="cg-datetime" value="${defaultDT}"></div>
-      <div><label>Location</label><select id="cg-location" onchange="toggleOtherLoc()">${locOptions}<option value="other">Other...</option></select>
-        <input type="text" id="cg-other-loc" placeholder="Enter location details" style="display:none;margin-top:8px;"></div>
+      <div id="cg-game-slots">
+        <div class="cg-slot" data-index="0">
+          <div><label>Game Date &amp; Time</label><input type="datetime-local" class="cg-datetime" value="${defaultDT}"></div>
+          <div style="margin-top:12px;"><label>Location</label><select class="cg-location" onchange="toggleOtherLoc(this)">${locOptions}<option value="other">Other...</option></select>
+            <input type="text" class="cg-other-loc" placeholder="Enter location" style="display:none;margin-top:8px;"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secondary btn-sm" onclick="addGameSlot()">+ Add Another Game</button>
+        <span id="cg-slot-count" style="font-size:13px;color:var(--text2);align-self:center;"></span>
+      </div>
       <div><label>Algorithm</label><select id="cg-algorithm">
         <option value="first_come" ${defAlg==='first_come'?'selected':''}>First Come, First Served</option>
         <option value="random" ${defAlg==='random'?'selected':''}>Random Selection</option></select></div>
@@ -642,7 +734,14 @@ function renderCreateGame() {
         <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="cg-cap-on" ${defCapOn?'checked':''} onchange="toggleCapInput()"><span class="slider"></span></label>
         <span style="font-size:14px;">Player Cap</span>
         <input type="number" id="cg-cap" value="${defCap}" min="2" max="100" style="width:80px;${defCapOn?'':'opacity:0.4'}"></div>
-      <div><label>Add Players to Game</label><div class="card" style="max-height:200px;overflow-y:auto;padding:8px 14px;">${playerCheckboxes||'<span style="color:var(--text2);font-size:13px;">No players loaded</span>'}</div></div>
+      <div><label>Add Players to Game</label>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <span style="font-size:13px;color:var(--text2);">Sort:</span>
+          <button class="btn-secondary btn-sm ${cgPlayerSort==='priority'?'active':''}" onclick="cgPlayerSort='priority';render()">Priority</button>
+          <button class="btn-secondary btn-sm ${cgPlayerSort==='first'?'active':''}" onclick="cgPlayerSort='first';render()">First Name</button>
+          <button class="btn-secondary btn-sm ${cgPlayerSort==='last'?'active':''}" onclick="cgPlayerSort='last';render()">Last Name</button>
+        </div>
+        <div class="card" style="max-height:200px;overflow-y:auto;padding:8px 14px;">${playerCheckboxes||'<span style="color:var(--text2);font-size:13px;">No players loaded</span>'}</div></div>
       <div style="display:flex;align-items:center;gap:12px;">
         <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="cg-delay-notif"><span class="slider"></span></label>
         <span style="font-size:14px;">Notify at future time</span></div>
@@ -652,19 +751,46 @@ function renderCreateGame() {
     </div></div></div>`;
 }
 
-function toggleOtherLoc() { const s=document.getElementById('cg-location'), o=document.getElementById('cg-other-loc'); o.style.display=s.value==='other'?'block':'none'; }
+function addGameSlot() {
+  const slots = document.getElementById('cg-game-slots');
+  const count = slots.querySelectorAll('.cg-slot').length;
+  if (count >= 10) { showToast('Max 10 games per batch','error'); return; }
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+2+count);
+  tomorrow.setHours(18,0,0,0);
+  const pad = n => String(n).padStart(2,'0');
+  const dt = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth()+1)}-${pad(tomorrow.getDate())}T${pad(tomorrow.getHours())}:${pad(tomorrow.getMinutes())}`;
+  const defLoc = cachedSettings?.default_location || '';
+  const locOptions = cachedLocations.map(l=>{
+    const sel = l.name === defLoc ? 'selected' : '';
+    return `<option value="${esc(l.name)}" ${sel}>${esc(l.name)}</option>`;
+  }).join('');
+  const div = document.createElement('div');
+  div.className = 'cg-slot';
+  div.dataset.index = count;
+  div.innerHTML = `<hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
+    <div style="display:flex;justify-content:space-between;align-items:center;"><strong style="font-size:14px;">Game ${count+1}</strong>
+      <button class="btn-danger btn-sm" onclick="this.closest('.cg-slot').remove();updateSlotCount()">Remove</button></div>
+    <div style="margin-top:8px;"><label>Game Date &amp; Time</label><input type="datetime-local" class="cg-datetime" value="${dt}"></div>
+    <div style="margin-top:12px;"><label>Location</label><select class="cg-location" onchange="toggleOtherLoc(this)">${locOptions}<option value="other">Other...</option></select>
+      <input type="text" class="cg-other-loc" placeholder="Enter location" style="display:none;margin-top:8px;"></div>`;
+  slots.appendChild(div);
+  updateSlotCount();
+}
+function updateSlotCount() {
+  const n = document.querySelectorAll('.cg-slot').length;
+  const el = document.getElementById('cg-slot-count');
+  if (el) el.textContent = n > 1 ? `${n} games` : '';
+}
+
+function toggleOtherLoc(el) {
+  const parent = el ? el.closest('.cg-slot') || el.closest('.card') : document;
+  const otherInput = parent.querySelector('.cg-other-loc');
+  if (otherInput) otherInput.style.display = el.value === 'other' ? 'block' : 'none';
+}
 function toggleCapInput() { const on=document.getElementById('cg-cap-on').checked; document.getElementById('cg-cap').style.opacity=on?'1':'0.4'; }
 
 async function createGame() {
-  const dt = document.getElementById('cg-datetime').value;
-  if(!dt) { showToast('Set a date and time','error'); return; }
-  // Normalize: datetime-local gives "YYYY-MM-DDTHH:MM", we need "YYYY-MM-DDTHH:MM:SS"
-  const gameDate = dt.includes(':') && dt.length === 16 ? dt + ':00' : dt;
-  // Validate it parses
-  if (isNaN(new Date(gameDate).getTime())) { showToast('Invalid date/time — please re-select','error'); return; }
-
-  let location = document.getElementById('cg-location').value;
-  if(location==='other') location = document.getElementById('cg-other-loc').value || 'TBD';
+  const slots = document.querySelectorAll('.cg-slot');
   const algorithm = document.getElementById('cg-algorithm').value;
   const capEnabled = document.getElementById('cg-cap-on').checked;
   const cap = parseInt(document.getElementById('cg-cap').value)||12;
@@ -674,13 +800,27 @@ async function createGame() {
     const ndt = document.getElementById('cg-notify-datetime').value;
     if(ndt) notify_future_at = ndt.length === 16 ? ndt + ':00' : ndt;
   }
+
+  // Collect games from all slots
+  const games = [];
+  for (const slot of slots) {
+    const dt = slot.querySelector('.cg-datetime').value;
+    if(!dt) { showToast('Set a date and time for all games','error'); return; }
+    const gameDate = dt.length === 16 ? dt + ':00' : dt;
+    if (isNaN(new Date(gameDate).getTime())) { showToast('Invalid date/time','error'); return; }
+    let location = slot.querySelector('.cg-location').value;
+    if(location==='other') location = slot.querySelector('.cg-other-loc').value || 'TBD';
+    games.push({ date:gameDate, location, algorithm, cap, cap_enabled:capEnabled, owner_added_player_ids:ownerAdded, notify_future_at });
+  }
+
   const btn=document.getElementById('cg-btn'); btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
   try {
-    await api('/games', { method:'POST', body:JSON.stringify({
-      date:gameDate, location, algorithm, cap, cap_enabled:capEnabled,
-      owner_added_player_ids:ownerAdded, notify_future_at
-    })});
-    showToast('Game created! 🎉','success');
+    if (games.length === 1) {
+      await api('/games', { method:'POST', body:JSON.stringify(games[0]) });
+    } else {
+      await api('/games/batch', { method:'POST', body:JSON.stringify({games}) });
+    }
+    showToast(`${games.length} game${games.length>1?'s':''} created! 🎉`,'success');
     await fetchGames(); navigate('games');
   } catch(e) { showToast(e.message,'error'); btn.disabled=false; btn.textContent='Create Game'; }
 }
@@ -695,10 +835,12 @@ function renderPlayerSettings() {
       <div><label>Email</label><input type="email" id="ps-email" value="${esc(u.email)}"></div>
       <div><label>Mobile</label><input type="tel" id="ps-mobile" value="${esc(u.mobile||'')}"></div>
       <div><label>New Password (leave blank to keep current)</label><input type="password" id="ps-pass" placeholder="••••••••"></div>
-      <div><label>Notification Preference</label><select id="ps-notif">
-        <option value="email" ${u.notif_pref==='email'?'selected':''}>Email</option>
-        <option value="sms" ${u.notif_pref==='sms'?'selected':''}>SMS / Text</option>
-        <option value="push" ${u.notif_pref==='push'?'selected':''}>Push Notification</option></select></div>
+      <div><label>Notification Preference</label>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;padding:4px 0;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;"><input type="checkbox" class="ps-notif-ch" value="email" ${u.notif_pref&&u.notif_pref.includes('email')?'checked':''} style="width:auto;" onchange="handleNotifCheckbox(this,'ps')"> Email</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;"><input type="checkbox" class="ps-notif-ch" value="sms" ${u.notif_pref&&u.notif_pref.includes('sms')?'checked':''} style="width:auto;" onchange="handleNotifCheckbox(this,'ps')"> SMS</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;"><input type="checkbox" class="ps-notif-none" value="none" ${u.notif_pref==='none'?'checked':''} style="width:auto;" onchange="handleNotifNone(this,'ps')"> None</label>
+        </div></div>
       <button class="btn-primary" onclick="savePlayerSettings()">Save Changes</button>
     </div></div></div>`;
 }
@@ -709,7 +851,7 @@ async function savePlayerSettings() {
   const email=document.getElementById('ps-email').value.trim(); if(email) body.email=email;
   const mobile=document.getElementById('ps-mobile').value.trim(); body.mobile=mobile;
   const pass=document.getElementById('ps-pass').value; if(pass) body.password=pass;
-  body.notif_pref=document.getElementById('ps-notif').value;
+  body.notif_pref=getNotifPref('ps');
   try {
     const updated = await api('/players/me', {method:'PATCH', body:JSON.stringify(body)});
     currentUser = updated; setStoredUser(updated);
@@ -722,18 +864,34 @@ function renderOwnerSettings() {
   if(!isOwner()) return '<p>Access denied.</p>';
   const s = cachedSettings;
   if(!s) return renderSpinner();
-  const locList = s.locations.map((l,i)=>
-    `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="font-size:14px;">${esc(l)}</span>
-      <button class="btn-danger btn-sm" onclick="removeLocation('${esc(l).replace(/'/g,"\\'")}')">✕</button></div>`
+  const locs = s.locations || [];
+  const locOptions = locs.map(l=>{
+    const sel = l.name === s.default_location ? 'selected' : '';
+    return `<option value="${esc(l.name)}" ${sel}>${esc(l.name)}</option>`;
+  }).join('');
+  const locList = locs.map((l,i)=>
+    `<div style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);" data-loc-id="${l.id}">
+      <div style="display:flex;flex-direction:column;gap:2px;">
+        <button class="btn-secondary btn-sm" style="padding:2px 6px;font-size:10px;line-height:1;" onclick="moveLocation(${l.id},'up')" ${i===0?'disabled':''}>▲</button>
+        <button class="btn-secondary btn-sm" style="padding:2px 6px;font-size:10px;line-height:1;" onclick="moveLocation(${l.id},'down')" ${i===locs.length-1?'disabled':''}>▼</button>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;font-weight:500;">${esc(l.name)}</div>
+        ${l.address?`<div style="font-size:12px;color:var(--text2);margin-top:2px;">${esc(l.address)}</div>`:''}
+      </div>
+      <button class="btn-secondary btn-sm" onclick="showEditLocation(${l.id},'${esc(l.name).replace(/'/g,"\\'")}','${esc(l.address||'').replace(/'/g,"\\'")}')">✏️</button>
+      <button class="btn-danger btn-sm" onclick="removeLocation(${l.id})">✕</button>
+    </div>`
   ).join('');
   return `<div class="fade-in" style="max-width:600px;">
-    <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">Admin Settings</h2>
+    <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">Organizer Settings</h2>
     <div class="card" style="margin-bottom:16px;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Game Defaults</h3>
       <div style="display:grid;gap:16px;">
         <div><label>Default Algorithm</label><select id="os-alg">
           <option value="first_come" ${s.default_algorithm==='first_come'?'selected':''}>First Come</option>
           <option value="random" ${s.default_algorithm==='random'?'selected':''}>Random</option></select></div>
+        <div><label>Default Location</label><select id="os-def-loc">
+          <option value="">— None —</option>${locOptions}</select></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div><label>Default Cap</label><input type="number" id="os-cap" value="${s.default_cap}" min="2" max="100"></div>
           <div style="display:flex;align-items:end;gap:8px;padding-bottom:2px;">
@@ -747,18 +905,24 @@ function renderOwnerSettings() {
         <div><label>Random Wait Period (minutes)</label><input type="number" id="os-rand-wait" value="${s.random_wait_period_minutes}" min="0"></div>
         <div style="display:flex;align-items:center;gap:8px;">
           <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="os-notify-new" ${s.notify_owner_new_signup?'checked':''}><span class="slider"></span></label>
-          <span style="font-size:13px;">Notify owners of new player signups</span></div>
+          <span style="font-size:13px;">Notify organizers of new player signups</span></div>
         <button class="btn-primary" onclick="saveOwnerSettings()">Save Settings</button>
       </div></div>
-    <div class="card"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Locations</h3>${locList}
-      <div style="display:flex;gap:8px;margin-top:12px;"><input id="os-new-loc" placeholder="New location name" style="flex:1;">
-        <button class="btn-primary btn-sm" onclick="addLocation()">Add</button></div></div></div>`;
+    <div class="card"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Locations</h3>${locList||'<p style="color:var(--text2);font-size:13px;">No locations yet.</p>'}
+      <div style="display:grid;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
+        <div style="display:flex;gap:8px;">
+          <input id="os-new-loc" placeholder="Location name" style="flex:1;">
+        </div>
+        <input id="os-new-addr" placeholder="Address (optional)" style="flex:1;">
+        <button class="btn-primary btn-sm" onclick="addLocation()">+ Add Location</button>
+      </div></div></div>`;
 }
 
 async function saveOwnerSettings() {
   try {
     await api('/settings', { method:'PATCH', body:JSON.stringify({
       default_algorithm: document.getElementById('os-alg').value,
+      default_location: document.getElementById('os-def-loc').value,
       default_cap: parseInt(document.getElementById('os-cap').value),
       cap_enabled: document.getElementById('os-cap-on').checked,
       high_priority_delay_minutes: parseInt(document.getElementById('os-hp-delay').value),
@@ -772,14 +936,56 @@ async function saveOwnerSettings() {
 
 async function addLocation() {
   const name = document.getElementById('os-new-loc').value.trim();
-  if(!name) return;
-  try { await api('/settings/locations',{method:'POST',body:JSON.stringify({name})}); showToast('Location added','success'); await fetchSettings(); render(); }
+  const address = document.getElementById('os-new-addr').value.trim();
+  if(!name) { showToast('Enter a location name','error'); return; }
+  try { await api('/settings/locations',{method:'POST',body:JSON.stringify({name,address})}); showToast('Location added','success'); await fetchSettings(); render(); }
   catch(e) { showToast(e.message,'error'); }
 }
 
-async function removeLocation(name) {
-  try { await api(`/settings/locations/${encodeURIComponent(name)}`,{method:'DELETE'}); showToast('Location removed','success'); await fetchSettings(); render(); }
+async function removeLocation(locId) {
+  if(!confirm('Remove this location?')) return;
+  try { await api(`/settings/locations/${locId}`,{method:'DELETE'}); showToast('Location removed','success'); await fetchSettings(); render(); }
   catch(e) { showToast(e.message,'error'); }
+}
+
+function showEditLocation(locId, name, address) {
+  const html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;" id="edit-loc-modal" onclick="if(event.target===this)this.remove()">
+    <div class="card" style="max-width:400px;width:100%;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Edit Location</h3>
+    <div style="display:grid;gap:12px;">
+      <div><label>Name</label><input type="text" id="el-name" value="${name}"></div>
+      <div><label>Address</label><input type="text" id="el-addr" value="${address}"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-primary" style="flex:1;" onclick="saveEditLocation(${locId})">Save</button>
+        <button class="btn-secondary" onclick="document.getElementById('edit-loc-modal').remove()">Cancel</button>
+      </div>
+    </div></div></div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function saveEditLocation(locId) {
+  const name = document.getElementById('el-name').value.trim();
+  const address = document.getElementById('el-addr').value.trim();
+  if(!name) { showToast('Name is required','error'); return; }
+  try {
+    await api(`/settings/locations/${locId}`,{method:'PATCH',body:JSON.stringify({name,address})});
+    showToast('Location updated','success');
+    document.getElementById('edit-loc-modal')?.remove();
+    await fetchSettings(); render();
+  } catch(e) { showToast(e.message,'error'); }
+}
+
+async function moveLocation(locId, direction) {
+  const locs = cachedSettings?.locations || [];
+  const ids = locs.map(l=>l.id);
+  const idx = ids.indexOf(locId);
+  if(idx<0) return;
+  if(direction==='up' && idx>0) { [ids[idx-1],ids[idx]]=[ids[idx],ids[idx-1]]; }
+  else if(direction==='down' && idx<ids.length-1) { [ids[idx+1],ids[idx]]=[ids[idx],ids[idx+1]]; }
+  else return;
+  try {
+    await api('/settings/locations/reorder',{method:'POST',body:JSON.stringify({location_ids:ids})});
+    await fetchSettings(); render();
+  } catch(e) { showToast(e.message,'error'); }
 }
 
 // ═══ PLAYER MANAGEMENT ═══════════════════════════════════════
@@ -787,6 +993,8 @@ function renderPlayerMgmt() {
   if(!isOwner()) return '<p>Access denied.</p>';
   const pending = cachedPlayers.filter(p=>p.status==='pending');
   const approved = cachedPlayers.filter(p=>p.status==='approved');
+  // Auto-switch to roster if no pending
+  if (mgmtTab === 'pending' && pending.length === 0) mgmtTab = 'roster';
   return `<div class="fade-in">
     <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">Player Management</h2>
     ${pending.length>0?`<div class="alert-bar"><span style="font-size:18px;">⚠</span><span><strong>${pending.length}</strong> player${pending.length!==1?'s':''} awaiting approval</span></div>`:''}
@@ -813,12 +1021,31 @@ function renderPendingPlayers(pending) {
   return `<div class="card" style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Mobile</th><th>Priority</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+function sortPlayers(list, sortBy) {
+  const prioOrder = {high:0, standard:1, low:2};
+  return [...list].sort((a,b) => {
+    if (sortBy === 'priority') {
+      const pd = (prioOrder[a.priority]||1) - (prioOrder[b.priority]||1);
+      if (pd !== 0) return pd;
+      return a.name.localeCompare(b.name);
+    } else if (sortBy === 'first') {
+      return a.name.localeCompare(b.name);
+    } else if (sortBy === 'last') {
+      const aLast = a.name.split(' ').slice(-1)[0] || a.name;
+      const bLast = b.name.split(' ').slice(-1)[0] || b.name;
+      return aLast.localeCompare(bLast);
+    }
+    return 0;
+  });
+}
+
 function renderRoster(approved) {
-  const rows = approved.map(p=>{
-    const roleBadge = p.role==='owner'?`<span class="badge badge-green">Owner</span>`:'';
+  const sorted = sortPlayers(approved, rosterSort);
+  const rows = sorted.map(p=>{
+    const roleBadge = p.role==='owner'?`<span class="badge badge-green">Organizer</span>`:'';
     const roleBtn = p.id!==currentUser.id ? (p.role==='owner'
-      ? `<button class="btn-secondary btn-sm" onclick="setRole(${p.id},'player')">Remove Owner</button>`
-      : `<button class="btn-secondary btn-sm" onclick="setRole(${p.id},'owner')">Make Owner</button>`) : '';
+      ? `<button class="btn-secondary btn-sm" onclick="setRole(${p.id},'player')">Remove Organizer</button>`
+      : `<button class="btn-secondary btn-sm" onclick="setRole(${p.id},'owner')">Make Organizer</button>`) : '';
     return `<tr>
       <td><strong>${esc(p.name)}</strong> ${roleBadge}</td><td>${esc(p.email)}</td><td>${esc(p.mobile)||'—'}</td>
       <td><select style="width:auto;padding:4px 8px;font-size:12px;" onchange="setPriority(${p.id},this.value)">
@@ -830,7 +1057,13 @@ function renderRoster(approved) {
         <button class="btn-secondary btn-sm" onclick="resetPlayerPass(${p.id})">Reset PW</button>
         ${p.id!==currentUser.id?`<button class="btn-danger btn-sm" onclick="deletePlayer(${p.id})">Delete</button>`:''}</div></td></tr>`;
   }).join('');
-  return `<div class="card" style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Mobile</th><th>Priority</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+    <span style="font-size:13px;color:var(--text2);">Sort:</span>
+    <button class="btn-secondary btn-sm ${rosterSort==='priority'?'active':''}" onclick="rosterSort='priority';render()">Priority</button>
+    <button class="btn-secondary btn-sm ${rosterSort==='first'?'active':''}" onclick="rosterSort='first';render()">First Name</button>
+    <button class="btn-secondary btn-sm ${rosterSort==='last'?'active':''}" onclick="rosterSort='last';render()">Last Name</button>
+  </div>
+  <div class="card" style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Mobile</th><th>Priority</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderAddPlayer() {
@@ -867,9 +1100,9 @@ async function setPriority(id, priority) {
   catch(e) { showToast(e.message,'error'); }
 }
 async function setRole(id, role) {
-  const action = role==='owner' ? 'Make this player an owner?' : 'Remove owner access from this player?';
+  const action = role==='owner' ? 'Make this player an organizer?' : 'Remove organizer access from this player?';
   if(!confirm(action)) return;
-  try { await api(`/admin/players/${id}`,{method:'PATCH',body:JSON.stringify({role})}); showToast(role==='owner'?'Player is now an owner':'Owner access removed','success'); await fetchPlayers(); render(); }
+  try { await api(`/admin/players/${id}`,{method:'PATCH',body:JSON.stringify({role})}); showToast(role==='owner'?'Player is now an organizer':'Organizer access removed','success'); await fetchPlayers(); render(); }
   catch(e) { showToast(e.message,'error'); }
 }
 async function resetPlayerPass(id) {
