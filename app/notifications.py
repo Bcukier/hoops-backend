@@ -54,7 +54,9 @@ def _get_twilio_client():
 # EMAIL (SendGrid API — uses HTTPS, no SMTP ports needed)
 # ═══════════════════════════════════════════════════════════════
 
-def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
+def _send_email_sync(to_email: str, subject: str, body: str,
+                     unsubscribe_token: str = None, group_id: int = None,
+                     group_name: str = None) -> bool:
     """Send an email via SendGrid API (blocking — run in executor)."""
     if not SENDGRID_API_KEY or not SENDGRID_FROM_EMAIL:
         logger.warning(f"📧 SendGrid not configured — email to {to_email} logged only")
@@ -82,12 +84,24 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
             )
     html_body = ''.join(parts)
 
+    # Build unsubscribe footer
+    unsub_footer = ""
+    base_url = os.environ.get("HOOPS_BASE_URL", "https://www.goatcommish.com")
+    if unsubscribe_token:
+        unsub_buttons = ""
+        if group_id:
+            gname_display = f' "{group_name}"' if group_name else ''
+            unsub_buttons += f'<a href="{base_url}/api/unsubscribe/{unsubscribe_token}/group/{group_id}" style="display:inline-block;padding:8px 16px;margin:4px;font-size:12px;color:#e74c3c;border:1px solid #e74c3c;border-radius:6px;text-decoration:none;">Remove me from{gname_display} group</a>'
+        unsub_buttons += f'<a href="{base_url}/api/unsubscribe/{unsubscribe_token}/emails" style="display:inline-block;padding:8px 16px;margin:4px;font-size:12px;color:#999;border:1px solid #ccc;border-radius:6px;text-decoration:none;">Unsubscribe from all GOATcommish emails</a>'
+        unsub_footer = f'<div style="text-align:center;margin-top:16px;">{unsub_buttons}</div>'
+
     html = f"""\
     <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;">
         <h2 style="color:#ff6a2f;">{subject}</h2>
         <p style="color:#333;line-height:1.6;">{html_body}</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
-        <p style="color:#999;font-size:12px;">Sent by GOATcommish — Pickup Basketball</p>
+        {unsub_footer}
+        <p style="color:#999;font-size:12px;text-align:center;">Sent by GOATcommish — Pickup Basketball</p>
     </div>"""
 
     message = Mail(
@@ -108,10 +122,14 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
         return False
 
 
-async def send_email(to_email: str, subject: str, body: str) -> bool:
+async def send_email(to_email: str, subject: str, body: str,
+                     unsubscribe_token: str = None, group_id: int = None,
+                     group_name: str = None) -> bool:
     """Send email asynchronously via SendGrid API."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_send_email_sync, to_email, subject, body))
+    return await loop.run_in_executor(
+        None, partial(_send_email_sync, to_email, subject, body,
+                      unsubscribe_token, group_id, group_name))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -177,12 +195,18 @@ async def send_notification(
     notif_pref: str,
     subject: str,
     body: str,
+    game_group_id: int = None,
+    game_id: int = None,
 ):
     """
     Send a notification to a player via ALL their preferred channels.
     notif_pref is comma-separated (e.g. "email,sms"). "none" = no delivery.
-    Always logs to the database.
+    Always logs to the database. Skips email if not verified.
+    Pass game_group_id or game_id for unsubscribe context.
     """
+    # Auto-resolve group from game if not provided
+    if not game_group_id and game_id:
+        game_group_id = await _game_group_id(db, game_id)
     channels = _parse_notif_pref(notif_pref)
 
     # Log to notification_log table (always, even if none)
@@ -198,21 +222,37 @@ async def send_notification(
         logger.info(f"📋 Player {player_id} has notifications set to 'none' — logged only")
         return
 
-    # Look up player contact info
+    # Look up player contact info + verification status + unsubscribe token
     cursor = await db.execute(
-        "SELECT email, mobile FROM players WHERE id = ?", (player_id,)
+        "SELECT email, mobile, email_verified, unsubscribe_token FROM players WHERE id = ?", (player_id,)
     )
     player = await cursor.fetchone()
     if not player:
         logger.warning(f"Player {player_id} not found for notification")
         return
 
+    # Look up group name for unsubscribe button
+    group_name = None
+    if game_group_id:
+        cursor = await db.execute("SELECT name FROM groups WHERE id=?", (game_group_id,))
+        grow = await cursor.fetchone()
+        if grow:
+            group_name = grow["name"]
+
     any_delivered = False
 
     for channel in channels:
         if channel == "email":
+            if not player["email_verified"]:
+                logger.info(f"📋 Player {player_id} email not verified — skipping email")
+                continue
             if player["email"]:
-                delivered = await send_email(player["email"], subject, body)
+                delivered = await send_email(
+                    player["email"], subject, body,
+                    unsubscribe_token=player["unsubscribe_token"],
+                    group_id=game_group_id,
+                    group_name=group_name,
+                )
                 any_delivered = any_delivered or delivered
             else:
                 logger.warning(f"Player {player_id} has no email address")
@@ -231,6 +271,12 @@ async def send_notification(
 # ═══════════════════════════════════════════════════════════════
 # HIGH-LEVEL NOTIFICATION FUNCTIONS
 # ═══════════════════════════════════════════════════════════════
+
+async def _game_group_id(db, game_id: int) -> int:
+    """Look up group_id for a game. Returns 0 if not found."""
+    cursor = await db.execute("SELECT group_id FROM games WHERE id=?", (game_id,))
+    row = await cursor.fetchone()
+    return row["group_id"] if row else 0
 
 def _format_game_date(game_date: str):
     """Format a game date string for display. Returns (nice_date, day, time)."""
@@ -253,6 +299,7 @@ async def notify_game_signup_open(
 ):
     """Notify a batch of players that signup is open for a game."""
     nice_date, subject_day, subject_time = _format_game_date(game_date)
+    gid = await _game_group_id(db, game_id)
 
     for pid in player_ids:
         cursor = await db.execute(
@@ -270,7 +317,7 @@ async def notify_game_signup_open(
             f"Open the app to sign up before spots fill:\n"
             f"https://www.goatcommish.com"
         )
-        await send_notification(db, pid, notif_pref, subject, body)
+        await send_notification(db, pid, notif_pref, subject, body, game_group_id=gid)
         await db.execute(
             """INSERT INTO game_notifications
                (game_id, player_id, notification_type, channel, message, delivered)
@@ -316,7 +363,8 @@ async def notify_batch_games_signup_open(
         if not row:
             continue
         notif_pref = row["notif_pref"]
-        await send_notification(db, pid, notif_pref, subject, body)
+        batch_gid = await _game_group_id(db, game_infos[0]["id"]) if game_infos else None
+        await send_notification(db, pid, notif_pref, subject, body, game_group_id=batch_gid)
         # Log against first game in batch
         for g in game_infos:
             await db.execute(
@@ -346,6 +394,7 @@ async def notify_selection_results(
             db, pid, row["notif_pref"],
             "🏀 You're IN!",
             "You've been selected to play! See you on the court.",
+            game_id=game_id,
         )
 
     for wp in waitlist_players:
@@ -361,6 +410,7 @@ async def notify_selection_results(
             db, pid, row["notif_pref"],
             "📋 Waitlisted",
             f"You're #{position} on the waitlist. We'll notify you if a spot opens up.",
+            game_id=game_id,
         )
 
 
@@ -380,6 +430,7 @@ async def notify_waitlist_promotion(
         db, player_id, row["notif_pref"],
         "🎉 Spot Opened — You're IN!",
         "A spot opened up and you've been moved in. See you on the court!",
+        game_id=game_id,
     )
     await db.execute(
         """INSERT INTO game_notifications
@@ -419,6 +470,7 @@ async def notify_owner_player_drop(
             f"⚠️ Player Drop — {weekday} {nice_date}",
             f"{player_name} dropped from {weekday} game on {nice_date} at {game['location']}.\n\n"
             f"Open the app to manage: https://www.goatcommish.com",
+            game_group_id=game["group_id"],
         )
 
 
@@ -450,6 +502,7 @@ async def notify_owners_new_signup(
             f"👤 New Signup — {weekday} {nice_date}",
             f"{player_name} signed up for {weekday} game on {nice_date} at {game['location']}.\n\n"
             f"Open the app to manage: https://www.goatcommish.com",
+            game_group_id=game["group_id"],
         )
 
 
@@ -478,7 +531,7 @@ async def notify_game_cancelled(
             f"🕐 {weekday}, {nice_date}\n\n"
             f"We'll let you know when the next game is scheduled."
         )
-        await send_notification(db, pid, notif_pref, subject, body)
+        await send_notification(db, pid, notif_pref, subject, body, game_id=game_id)
 
 
 async def notify_game_edited(
@@ -524,7 +577,7 @@ async def notify_game_edited(
             f"Open the app to review:\n"
             f"https://www.goatcommish.com"
         )
-        await send_notification(db, pid, notif_pref, subject, body)
+        await send_notification(db, pid, notif_pref, subject, body, game_id=game_id)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -577,4 +630,4 @@ async def notify_group_invitation(
         f"Decline: {decline_url}\n\n"
         f"Or open the app to respond: {base_url}"
     )
-    await send_notification(db, target_player_id, prow["notif_pref"], subject, body)
+    await send_notification(db, target_player_id, prow["notif_pref"], subject, body, game_group_id=group_id)

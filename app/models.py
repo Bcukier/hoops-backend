@@ -42,6 +42,7 @@ class PlayerOut(BaseModel):
     notif_pref: str
     force_password_change: bool = False
     is_superuser: bool = False
+    email_verified: bool = False
     created_at: str
     groups: list["GroupMembershipOut"] = []
     pending_invitations: list["InvitationOut"] = []

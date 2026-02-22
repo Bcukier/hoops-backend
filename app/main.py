@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Request, status, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
@@ -54,6 +54,17 @@ async def _bg_notify(coro_fn, *args):
 
 def bg_notify(coro_fn, *args):
     asyncio.create_task(_bg_notify(coro_fn, *args))
+
+async def _send_verification_code_bg(player_id: int, email: str):
+    """Background task to send verification code."""
+    try:
+        db = await get_db()
+        try:
+            await _send_verification_code(db, player_id, email)
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.error(f"Verification code send error: {e}")
 
 
 @asynccontextmanager
@@ -138,6 +149,7 @@ async def player_out_from_db(db, player_id: int) -> PlayerOut:
         role=role, priority=d.get("priority","standard"), status=d["status"],
         notif_pref=d["notif_pref"], force_password_change=bool(d.get("force_password_change",0)),
         is_superuser=bool(d.get("is_superuser",0)),
+        email_verified=bool(d.get("email_verified",0)),
         created_at=str(d["created_at"]), groups=groups, pending_invitations=invitations)
 
 
@@ -270,10 +282,11 @@ async def signup(req: SignupRequest, request: Request):
             raise HTTPException(400, "Invalid email format")
         pw_hash = hash_password(req.password)
         notif_pref = validate_notif_pref(req.notif_pref)
+        unsub_token = secrets.token_urlsafe(24)
         await db.execute(
-            """INSERT INTO players (name,email,mobile,password_hash,role,priority,status,notif_pref)
-               VALUES (?,?,?,?,'player','standard','approved',?)""",
-            (name, email, sanitize_string(req.mobile), pw_hash, notif_pref))
+            """INSERT INTO players (name,email,mobile,password_hash,role,priority,status,notif_pref,email_verified,unsubscribe_token)
+               VALUES (?,?,?,?,'player','standard','approved',?,0,?)""",
+            (name, email, sanitize_string(req.mobile), pw_hash, notif_pref, unsub_token))
         await db.commit()
         cursor = await db.execute("SELECT id FROM players WHERE email=?", (email,))
         player = await cursor.fetchone()
@@ -326,6 +339,8 @@ async def signup(req: SignupRequest, request: Request):
 
         role = await get_player_role(db, pid)
         token, jti = create_access_token(pid, role)
+        # Send email verification code
+        asyncio.create_task(_send_verification_code_bg(pid, email))
         pout = await player_out_from_db(db, pid)
         return TokenResponse(access_token=token, player=pout)
     finally:
@@ -469,6 +484,118 @@ async def confirm_password_reset(token: str = Query(...), new_password: str = Qu
         await db.close()
 
 
+async def _send_verification_code(db, player_id: int, email: str):
+    """Generate and send a 6-digit email verification code."""
+    import random
+    code = str(random.randint(100000, 999999))
+    expires = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    # Invalidate old codes
+    await db.execute("UPDATE email_verification_codes SET used=1 WHERE player_id=?", (player_id,))
+    await db.execute(
+        "INSERT INTO email_verification_codes (player_id, code, expires_at) VALUES (?,?,?)",
+        (player_id, code, expires))
+    await db.commit()
+    from app.notifications import send_email
+    await send_email(
+        email,
+        "🔑 GOATcommish — Verify Your Email",
+        f"Your verification code is:\n\n{code}\n\nEnter this code in the app to confirm your email address.\n\nThis code expires in 24 hours."
+    )
+
+
+@app.post("/api/auth/verify-email")
+async def verify_email(req: dict, player_id: int = Depends(get_current_player_id)):
+    """Verify email address with a 6-digit code."""
+    code = req.get("code", "").strip()
+    if not code:
+        raise HTTPException(400, "Verification code required")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM email_verification_codes WHERE player_id=? AND code=? AND used=0",
+            (player_id, code))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(400, "Invalid verification code")
+        if row["expires_at"] < datetime.now(timezone.utc).isoformat():
+            raise HTTPException(400, "Verification code has expired")
+        await db.execute("UPDATE players SET email_verified=1 WHERE id=?", (player_id,))
+        await db.execute("UPDATE email_verification_codes SET used=1 WHERE id=?", (row["id"],))
+        await db.commit()
+        pout = await player_out_from_db(db, player_id)
+        return {"message": "Email verified!", "player": pout}
+    finally:
+        await db.close()
+
+
+@app.post("/api/auth/resend-verification")
+async def resend_verification(player_id: int = Depends(get_current_player_id)):
+    """Resend the email verification code."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT email, email_verified FROM players WHERE id=?", (player_id,))
+        p = await cursor.fetchone()
+        if not p:
+            raise HTTPException(404, "Player not found")
+        if p["email_verified"]:
+            return {"message": "Email already verified"}
+        await _send_verification_code(db, player_id, p["email"])
+        return {"message": "Verification code sent"}
+    finally:
+        await db.close()
+
+
+@app.get("/api/unsubscribe/{token}/group/{group_id}")
+async def unsubscribe_from_group(token: str, group_id: int):
+    """Remove player from a group via unsubscribe link. Marks as removed_self."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, name FROM players WHERE unsubscribe_token=?", (token,))
+        player = await cursor.fetchone()
+        if not player:
+            return HTMLResponse("<div style='font-family:sans-serif;max-width:500px;margin:60px auto;padding:20px;text-align:center;'><h2>Invalid link</h2><p>This unsubscribe link is no longer valid.</p></div>")
+        cursor = await db.execute("SELECT name FROM groups WHERE id=?", (group_id,))
+        group = await cursor.fetchone()
+        group_name = group["name"] if group else "the group"
+        # Mark as removed_self so organizers can't re-add
+        await db.execute(
+            "UPDATE group_members SET status='removed_self' WHERE group_id=? AND player_id=?",
+            (group_id, player["id"]))
+        # Remove from any pending games in this group
+        await db.execute(
+            """DELETE FROM game_signups WHERE player_id=? AND game_id IN
+               (SELECT id FROM games WHERE group_id=? AND closed=0)""",
+            (player["id"], group_id))
+        await db.commit()
+        return HTMLResponse(f"""<div style="font-family:sans-serif;max-width:500px;margin:60px auto;padding:20px;text-align:center;">
+            <h2 style="color:#ff6a2f;">Removed from {group_name}</h2>
+            <p style="color:#333;line-height:1.6;">You've been removed from the group <strong>{group_name}</strong>.</p>
+            <p style="color:#666;font-size:14px;">You can rejoin anytime by signing in at <a href="https://www.goatcommish.com" style="color:#ff6a2f;">goatcommish.com</a> and requesting to join the group.</p>
+        </div>""")
+    finally:
+        await db.close()
+
+
+@app.get("/api/unsubscribe/{token}/emails")
+async def unsubscribe_from_emails(token: str):
+    """Unsubscribe player from all GOATcommish emails."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, name FROM players WHERE unsubscribe_token=?", (token,))
+        player = await cursor.fetchone()
+        if not player:
+            return HTMLResponse("<div style='font-family:sans-serif;max-width:500px;margin:60px auto;padding:20px;text-align:center;'><h2>Invalid link</h2></div>")
+        await db.execute("UPDATE players SET notif_pref='none' WHERE id=?", (player["id"],))
+        await db.commit()
+        return HTMLResponse(f"""<div style="font-family:sans-serif;max-width:500px;margin:60px auto;padding:20px;text-align:center;">
+            <h2 style="color:#ff6a2f;">Unsubscribed</h2>
+            <p style="color:#333;line-height:1.6;">You've been unsubscribed from all GOATcommish emails.</p>
+            <p style="color:#666;font-size:14px;">You can re-enable notifications anytime in your settings at <a href="https://www.goatcommish.com" style="color:#ff6a2f;">goatcommish.com</a>.</p>
+        </div>""")
+    finally:
+        await db.close()
+
+
 # ═════════════════════════════════════════════════════════════════
 # GROUP ENDPOINTS
 # ═════════════════════════════════════════════════════════════════
@@ -549,6 +676,11 @@ async def join_group(req: GroupJoinRequest, player_id: int = Depends(get_current
                 await db.commit()
                 return {"message": "Joined group", "group_id": gid}
             if existing["status"] == "declined":
+                await db.execute(
+                    "UPDATE group_members SET status='active' WHERE group_id=? AND player_id=?", (gid, player_id))
+                await db.commit()
+                return {"message": "Re-joined group", "group_id": gid}
+            if existing["status"] == "removed_self":
                 await db.execute(
                     "UPDATE group_members SET status='active' WHERE group_id=? AND player_id=?", (gid, player_id))
                 await db.commit()
@@ -657,6 +789,8 @@ async def invite_to_group(group_id: int, req: PlayerCreate, player_id: int = Dep
             mem = await cursor2.fetchone()
             if mem and mem["status"] == "active":
                 return {"message": f"{name} is already an active member", "player_id": target_pid}
+            if mem and mem["status"] == "removed_self":
+                raise HTTPException(400, f"{name} has removed themselves from this group. They must rejoin on their own.")
             if not mem:
                 await db.execute(
                     "INSERT INTO group_members (group_id,player_id,role,priority,status) VALUES (?,?,'player','standard','invited')",
@@ -676,10 +810,11 @@ async def invite_to_group(group_id: int, req: PlayerCreate, player_id: int = Dep
             pw = email.strip().lower()
             pw_hash = hash_password(pw)
             mobile = sanitize_string(req.mobile) if req.mobile else ""
+            unsub_token = secrets.token_urlsafe(24)
             await db.execute(
-                """INSERT INTO players (name,email,mobile,password_hash,role,priority,status,notif_pref,force_password_change)
-                   VALUES (?,?,?,?,'player','standard','approved','email',1)""",
-                (name, email, mobile, pw_hash))
+                """INSERT INTO players (name,email,mobile,password_hash,role,priority,status,notif_pref,force_password_change,email_verified,unsubscribe_token)
+                   VALUES (?,?,?,?,'player','standard','approved','email',1,0,?)""",
+                (name, email, mobile, pw_hash, unsub_token))
             await db.commit()
             cursor2 = await db.execute("SELECT id FROM players WHERE email=?", (email,))
             target_pid = (await cursor2.fetchone())["id"]
@@ -737,7 +872,6 @@ async def accept_invitation_public(token: str):
             "SELECT * FROM group_invitations WHERE token=? AND status='pending'", (token,))
         inv = await cursor.fetchone()
         if not inv:
-            from fastapi.responses import HTMLResponse
             return HTMLResponse("<html><body><h2>Invitation already responded to or expired.</h2></body></html>")
         await db.execute("UPDATE group_invitations SET status='accepted' WHERE id=?", (inv["id"],))
         await db.execute("UPDATE group_members SET status='active' WHERE group_id=? AND player_id=?",
@@ -745,7 +879,6 @@ async def accept_invitation_public(token: str):
         await db.commit()
         cursor2 = await db.execute("SELECT name FROM groups WHERE id=?", (inv["group_id"],))
         gname = (await cursor2.fetchone())["name"]
-        from fastapi.responses import HTMLResponse
         return HTMLResponse(f"<html><body style='text-align:center;padding:40px;font-family:sans-serif;'>"
                            f"<h2>✅ You've joined <strong>{gname}</strong>!</h2>"
                            f"<p>Open the app to see games.</p></body></html>")
@@ -761,13 +894,11 @@ async def decline_invitation_public(token: str):
             "SELECT * FROM group_invitations WHERE token=? AND status='pending'", (token,))
         inv = await cursor.fetchone()
         if not inv:
-            from fastapi.responses import HTMLResponse
             return HTMLResponse("<html><body><h2>Invitation already responded to or expired.</h2></body></html>")
         await db.execute("UPDATE group_invitations SET status='declined' WHERE id=?", (inv["id"],))
         await db.execute("UPDATE group_members SET status='declined' WHERE group_id=? AND player_id=?",
                          (inv["group_id"], inv["player_id"]))
         await db.commit()
-        from fastapi.responses import HTMLResponse
         return HTMLResponse(f"<html><body style='text-align:center;padding:40px;font-family:sans-serif;'>"
                            f"<h2>Invitation declined.</h2></body></html>")
     finally:
@@ -825,6 +956,7 @@ async def import_players_csv(group_id: int, file: UploadFile = File(...),
                     "SELECT status FROM group_members WHERE group_id=? AND player_id=?", (group_id, pid))
                 mem = await cursor2.fetchone()
                 if mem and mem["status"] == "active": skipped += 1; continue
+                if mem and mem["status"] == "removed_self": skipped += 1; continue
                 if mem:
                     await db.execute("UPDATE group_members SET status='invited' WHERE group_id=? AND player_id=?", (group_id, pid))
                 else:
@@ -839,10 +971,11 @@ async def import_players_csv(group_id: int, file: UploadFile = File(...),
             else:
                 pw = email.strip().lower()
                 pw_hash = hash_password(pw)
+                unsub_token = secrets.token_urlsafe(24)
                 await db.execute(
-                    """INSERT INTO players (name,email,mobile,password_hash,role,priority,status,notif_pref,force_password_change)
-                       VALUES (?,?,?,?,'player','standard','approved','email',1)""",
-                    (name, email, mobile, pw_hash))
+                    """INSERT INTO players (name,email,mobile,password_hash,role,priority,status,notif_pref,force_password_change,email_verified,unsubscribe_token)
+                       VALUES (?,?,?,?,'player','standard','approved','email',1,0,?)""",
+                    (name, email, mobile, pw_hash, unsub_token))
                 await db.commit()
                 cursor2 = await db.execute("SELECT id FROM players WHERE email=?", (email,))
                 pid = (await cursor2.fetchone())["id"]

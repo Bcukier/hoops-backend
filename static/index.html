@@ -338,6 +338,7 @@ function render() {
   if (currentPage === 'signup') { app.innerHTML = renderNewSignup(); return; }
   if (currentPage === 'reset_password') { app.innerHTML = renderResetPassword(); return; }
   if (currentPage === 'force_change_pw') { app.innerHTML = renderForceChangePassword(); return; }
+  if (currentPage === 'verify_email') { app.innerHTML = renderVerifyEmail(); return; }
 
   let nav = renderNav();
   let content = '';
@@ -429,6 +430,12 @@ async function doLogin() {
       return;
     }
 
+    if (!currentUser.email_verified) {
+      currentPage = 'verify_email';
+      render();
+      return;
+    }
+
     currentPage = 'games';
     await loadPageData();
     render();
@@ -514,6 +521,11 @@ async function doForceChangePassword() {
     currentUser = updated;
     setStoredUser(currentUser);
     showToast('Password updated!','success');
+    if (!currentUser.email_verified) {
+      currentPage = 'verify_email';
+      render();
+      return;
+    }
     currentPage = 'games';
     await loadPageData();
     render();
@@ -522,6 +534,56 @@ async function doForceChangePassword() {
 }
 
 // ═══ NEW PLAYER SIGNUP ═══════════════════════════════════════
+function renderVerifyEmail() {
+  return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
+    <div class="card glow-border fade-in" style="max-width:400px;width:100%;text-align:center;">
+      <div style="font-size:48px;margin-bottom:8px;">📧</div>
+      <h2 style="font-size:24px;font-weight:800;margin-bottom:4px;">Verify Your Email</h2>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:24px;">We sent a 6-digit code to <strong>${esc(currentUser?.email||'')}</strong>. Enter it below to confirm your email address.</p>
+      <div style="text-align:left;">
+        <label>Verification Code</label>
+        <input type="text" id="ve-code" placeholder="123456" maxlength="6" inputmode="numeric" pattern="[0-9]*"
+          style="margin-bottom:16px;text-align:center;font-size:24px;letter-spacing:8px;font-weight:700;"
+          onkeydown="if(event.key==='Enter')doVerifyEmail()">
+        <button class="btn-primary" id="ve-btn" style="width:100%;padding:12px;" onclick="doVerifyEmail()">Verify Email</button>
+      </div>
+      <p style="margin-top:16px;font-size:13px;color:var(--text2);">Didn't get the code? <a style="color:var(--orange);cursor:pointer;" onclick="resendVerification()">Resend code</a></p>
+      <p style="margin-top:8px;font-size:12px;color:var(--text2);">You can <a style="color:var(--orange);cursor:pointer;" onclick="skipVerification()">skip for now</a> — but you won't receive email notifications until verified.</p>
+    </div>
+  </div>`;
+}
+
+async function doVerifyEmail() {
+  const code = document.getElementById('ve-code').value.trim();
+  if (!code || code.length !== 6) { showToast('Enter the 6-digit code','error'); return; }
+  const btn = document.getElementById('ve-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const data = await api('/auth/verify-email', { method:'POST', body:JSON.stringify({code}) });
+    currentUser = data.player;
+    setStoredUser(currentUser);
+    showToast('Email verified! 🎉','success');
+    currentPage = 'games';
+    await loadPageData();
+    render();
+    startGameRefresh();
+  } catch(e) { showToast(e.message,'error'); btn.disabled=false; btn.textContent='Verify Email'; }
+}
+
+async function resendVerification() {
+  try {
+    await api('/auth/resend-verification', { method:'POST' });
+    showToast('Verification code resent — check your email','success');
+  } catch(e) { showToast(e.message,'error'); }
+}
+
+function skipVerification() {
+  showToast('You can verify later in Player Settings','info');
+  currentPage = 'games';
+  loadPageData().then(() => { render(); startGameRefresh(); });
+}
+
+// ═══ NEW PLAYER SIGNUP (FORM) ═══════════════════════════════
 function renderNewSignup() {
   return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
     <div class="card glow-border fade-in" style="max-width:420px;width:100%;text-align:center;">
@@ -588,11 +650,9 @@ async function doSignup() {
     setToken(data.access_token);
     currentUser = data.player;
     setStoredUser(currentUser);
-    showToast('Welcome to GOATcommish! 🏀','success');
-    currentPage = 'games';
-    await loadPageData();
+    showToast('Welcome! Check your email for a verification code 📧','success');
+    currentPage = 'verify_email';
     render();
-    startGameRefresh();
   } catch(e) { showToast(e.message,'error'); btn.disabled=false; btn.textContent='Sign Up'; }
 }
 
@@ -1000,6 +1060,7 @@ function renderPlayerSettings() {
   return `<div class="fade-in" style="max-width:500px;">
     <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">My Settings</h2>
     <div class="card" style="margin-bottom:16px;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Profile</h3>
+    ${!u.email_verified ? '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;">⚠️ Email not verified — you won\'t receive email notifications. <a style="color:var(--orange);cursor:pointer;font-weight:600;" onclick="resendVerification().then(()=>{currentPage=\'verify_email\';render();})">Verify now</a></div>' : ''}
     <div style="display:grid;gap:16px;">
       <div><label>Name</label><input id="ps-name" value="${esc(u.name)}"></div>
       <div><label>Email</label><input type="email" id="ps-email" value="${esc(u.email)}"></div>
@@ -1706,6 +1767,12 @@ function stopGameRefresh() { if(gameRefreshTimer) { clearInterval(gameRefreshTim
 
       if (currentUser.force_password_change) {
         currentPage = 'force_change_pw';
+        render();
+        return;
+      }
+
+      if (!currentUser.email_verified) {
+        currentPage = 'verify_email';
         render();
         return;
       }

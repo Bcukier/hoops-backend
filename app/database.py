@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS players (
     notif_pref TEXT NOT NULL DEFAULT 'email',
     force_password_change INTEGER DEFAULT 0,
     is_superuser INTEGER DEFAULT 0,
+    email_verified INTEGER DEFAULT 0,
+    unsubscribe_token TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -39,9 +41,18 @@ CREATE TABLE IF NOT EXISTS group_members (
     player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
     role TEXT NOT NULL DEFAULT 'player' CHECK(role IN ('organizer','player')),
     priority TEXT NOT NULL DEFAULT 'standard' CHECK(priority IN ('high','standard','low')),
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('active','pending','invited','declined')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('active','pending','invited','declined','removed_self')),
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(group_id, player_id)
+);
+
+CREATE TABLE IF NOT EXISTS email_verification_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS group_invitations (
@@ -193,6 +204,8 @@ async def _run_migrations(db):
     for tbl, col, defn in [
         ("players", "force_password_change", "INTEGER DEFAULT 0"),
         ("players", "is_superuser", "INTEGER DEFAULT 0"),
+        ("players", "email_verified", "INTEGER DEFAULT 0"),
+        ("players", "unsubscribe_token", "TEXT"),
         ("games", "group_id", "INTEGER NOT NULL DEFAULT 0"),
         ("games", "random_high_auto", "INTEGER DEFAULT 1"),
         ("games", "batch_id", "TEXT"),
@@ -207,6 +220,42 @@ async def _run_migrations(db):
 
     # Migrate push -> email
     await db.execute("UPDATE players SET notif_pref='email' WHERE notif_pref='push'")
+
+    # Create email_verification_codes table if missing
+    await db.execute("""CREATE TABLE IF NOT EXISTS email_verification_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        code TEXT NOT NULL, expires_at TEXT NOT NULL,
+        used INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+
+    # Generate unsubscribe tokens for players missing one
+    import secrets as _secrets
+    cursor = await db.execute("SELECT id FROM players WHERE unsubscribe_token IS NULL")
+    for row in await cursor.fetchall():
+        await db.execute("UPDATE players SET unsubscribe_token=? WHERE id=?",
+                         (_secrets.token_urlsafe(24), row["id"]))
+
+    # Mark existing players as email_verified (grandfathered in)
+    await db.execute("UPDATE players SET email_verified=1 WHERE email_verified=0 AND created_at < datetime('now')")
+    await db.commit()
+
+    # Migrate group_members to support 'removed_self' status
+    cursor = await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='group_members'")
+    row = await cursor.fetchone()
+    if row and 'removed_self' not in (row["sql"] or ""):
+        await db.execute("""CREATE TABLE IF NOT EXISTS group_members_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'player' CHECK(role IN ('organizer','player')),
+            priority TEXT NOT NULL DEFAULT 'standard' CHECK(priority IN ('high','standard','low')),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('active','pending','invited','declined','removed_self')),
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(group_id, player_id))""")
+        await db.execute("INSERT OR IGNORE INTO group_members_new SELECT * FROM group_members")
+        await db.execute("DROP TABLE group_members")
+        await db.execute("ALTER TABLE group_members_new RENAME TO group_members")
+        await db.commit()
 
     # Check if groups exist already
     cursor = await db.execute("SELECT COUNT(*) as c FROM groups")
