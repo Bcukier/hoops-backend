@@ -850,10 +850,6 @@ function renderCreateGame() {
             <input type="text" class="cg-other-loc" placeholder="Enter location" style="display:none;margin-top:8px;"></div>
         </div>
       </div>
-      <div style="display:flex;gap:8px;">
-        <button class="btn-secondary btn-sm" onclick="addGameSlot()">+ Add Another Game</button>
-        <span id="cg-slot-count" style="font-size:13px;color:var(--text2);align-self:center;"></span>
-      </div>
       <div><label>Algorithm <span style="cursor:pointer;color:var(--orange);font-size:16px;vertical-align:middle;" onclick="navigate('algorithm_info')" title="Learn about algorithms">ℹ️</span></label><select id="cg-algorithm" onchange="toggleRandomOpts()">
         <option value="first_come" ${defAlg==='first_come'?'selected':''}>First Come, First Served</option>
         <option value="random" ${defAlg==='random'?'selected':''}>Random Selection</option></select></div>
@@ -881,7 +877,14 @@ function renderCreateGame() {
         <span style="font-size:14px;">Notify at future time</span></div>
       <div id="cg-delay-fields" style="display:none;">
         <label>Notification Date &amp; Time</label><input type="datetime-local" id="cg-notify-datetime" value="${defaultNotifyDT}"></div>
-      <button class="btn-primary" id="cg-btn" style="width:100%;padding:12px;margin-top:8px;" onclick="createGame()">Create Game</button>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="btn-primary" id="cg-btn" style="flex:1;padding:12px;" onclick="createGame()">Create Game &amp; Notify</button>
+        <button class="btn-secondary" id="cg-add-btn" style="flex:1;padding:12px;" onclick="addGameSlot()">+ Add Another Game</button>
+      </div>
+      <span id="cg-slot-count" style="font-size:13px;color:var(--text2);text-align:center;display:block;margin-top:4px;"></span>
+      <div id="cg-send-prev" style="display:none;margin-top:4px;">
+        <button class="btn-secondary" style="width:100%;padding:8px;font-size:12px;color:var(--text2);" onclick="createGameSkipLast()">Send notifications for previous games without this one</button>
+      </div>
     </div></div></div>`;
 }
 
@@ -913,7 +916,9 @@ function addGameSlot() {
 function updateSlotCount() {
   const n = document.querySelectorAll('.cg-slot').length;
   const el = document.getElementById('cg-slot-count');
-  if (el) el.textContent = n > 1 ? `${n} games` : '';
+  if (el) el.textContent = n > 1 ? `${n} games queued` : '';
+  const prev = document.getElementById('cg-send-prev');
+  if (prev) prev.style.display = n > 1 ? 'block' : 'none';
 }
 
 function toggleOtherLoc(el) {
@@ -928,8 +933,9 @@ function toggleRandomOpts() {
   if (opts) opts.style.display = alg === 'random' ? 'block' : 'none';
 }
 
-async function createGame() {
-  const slots = document.querySelectorAll('.cg-slot');
+async function createGame(skipLast = false) {
+  const allSlots = [...document.querySelectorAll('.cg-slot')];
+  const slots = skipLast && allSlots.length > 1 ? allSlots.slice(0, -1) : allSlots;
   const algorithm = document.getElementById('cg-algorithm').value;
   const capEnabled = document.getElementById('cg-cap-on').checked;
   const cap = parseInt(document.getElementById('cg-cap').value)||12;
@@ -944,7 +950,7 @@ async function createGame() {
     if(ndt) notify_future_at = ndt.length === 16 ? ndt + ':00' : ndt;
   }
 
-  // Collect games from all slots
+  // Collect games from slots
   const games = [];
   for (const slot of slots) {
     const dt = slot.querySelector('.cg-datetime').value;
@@ -965,7 +971,11 @@ async function createGame() {
     }
     showToast(`${games.length} game${games.length>1?'s':''} created! 🎉`,'success');
     await fetchGames(); navigate('games');
-  } catch(e) { showToast(e.message,'error'); btn.disabled=false; btn.textContent='Create Game'; }
+  } catch(e) { showToast(e.message,'error'); btn.disabled=false; btn.textContent='Create Game & Notify'; }
+}
+
+function createGameSkipLast() {
+  createGame(true);
 }
 
 // ═══ PLAYER SETTINGS ═════════════════════════════════════════
