@@ -363,7 +363,7 @@ function renderNav() {
   const invBadge = invCount>0 ? `<span style="background:var(--orange);color:#fff;border-radius:50%;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">${invCount}</span>` : '';
   const org = isOrganizer();
   return `<nav><div class="inner">
-    <div class="logo" onclick="navigate('games')"><img src="/static/icon-40.png?v=3" style="width:32px;height:32px;vertical-align:middle;border-radius:4px;">commish</div>
+    <div class="logo" onclick="navigate('games')"><img src="/static/icon-nav.jpeg?v=4" style="width:44px;height:44px;vertical-align:middle;border-radius:8px;">commish</div>
     <div class="nav-links">
       <a onclick="navigate('games')" class="${currentPage==='games'?'active':''}">Games</a>
       ${org?`<a onclick="navigate('create_game')" class="${currentPage==='create_game'?'active':''}">Create Game</a>`:''}
@@ -377,7 +377,7 @@ function renderNav() {
   </div></nav>
   <div class="mobile-menu ${mobileMenuOpen?'open':''}" onclick="closeMobileMenu(event)">
     <div class="mobile-menu-content">
-      <div class="logo" style="margin-bottom:20px;font-size:20px" onclick="navigate('games');mobileMenuOpen=false;"><img src="/static/icon-40.png?v=3" style="width:28px;height:28px;vertical-align:middle;border-radius:4px;">commish</div>
+      <div class="logo" style="margin-bottom:20px;font-size:20px" onclick="navigate('games');mobileMenuOpen=false;"><img src="/static/icon-nav.jpeg?v=4" style="width:40px;height:40px;vertical-align:middle;border-radius:8px;">commish</div>
       <a onclick="navigate('games');mobileMenuOpen=false;" class="${currentPage==='games'?'active':''}">🎮 Games</a>
       ${org?`<a onclick="navigate('create_game');mobileMenuOpen=false;" class="${currentPage==='create_game'?'active':''}">➕ Create Game</a>`:''}
       ${org?`<a onclick="navigate('player_mgmt');mobileMenuOpen=false;" class="${currentPage==='player_mgmt'?'active':''}">👥 Players</a>`:''}
@@ -601,7 +601,7 @@ function renderGames() {
   if (loading) return renderSpinner();
   const games = cachedGames.sort((a,b)=>new Date(a.date)-new Date(b.date));
   if (!games.length) return `<div class="fade-in" style="text-align:center;padding:60px 20px;">
-    <div style="font-size:64px;margin-bottom:16px;"><img src="/static/icon-192.png?v=3" style="width:80px;height:80px;"></div>
+    <div style="font-size:64px;margin-bottom:16px;"><img src="/static/icon-nav.jpeg?v=4" style="width:80px;height:80px;border-radius:12px;"></div>
     <h2 style="font-weight:700;margin-bottom:8px;">No Games Available</h2>
     <p style="color:var(--text2);font-size:14px;">Check back later or ask an organizer to create a game.</p></div>`;
 
