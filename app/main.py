@@ -1539,9 +1539,21 @@ async def add_player_to_game(game_id: int, target_id: int,
         g = await cursor.fetchone()
         if not g: raise HTTPException(404)
         await require_group_organizer(db, player_id, g["group_id"])
+
+        # Determine correct status based on algorithm and game state
+        if g["algorithm"] == "random" and not g["selection_done"]:
+            signup_status = "pending"
+        elif g["algorithm"] == "first_come" and g["cap_enabled"]:
+            cursor2 = await db.execute(
+                "SELECT COUNT(*) as cnt FROM game_signups WHERE game_id=? AND status='in'", (game_id,))
+            cnt = (await cursor2.fetchone())["cnt"]
+            signup_status = "in" if cnt < g["cap"] else "waitlist"
+        else:
+            signup_status = "in"
+
         await db.execute(
-            "INSERT OR IGNORE INTO game_signups (game_id,player_id,status,owner_added) VALUES (?,?,'in',1)",
-            (game_id, target_id))
+            "INSERT OR IGNORE INTO game_signups (game_id,player_id,status,owner_added) VALUES (?,?,?,1)",
+            (game_id, target_id, signup_status))
         await db.commit()
         cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
         return await game_to_out(db, await cursor.fetchone())

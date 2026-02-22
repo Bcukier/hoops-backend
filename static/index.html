@@ -759,6 +759,7 @@ function renderGameColumn(game) {
 
     ownerCtrl = `${cascadeStatus}<div style="padding:4px 16px 8px;display:flex;gap:4px;">
       ${game.algorithm==='random'&&!game.selection_done ? `<button class="btn-primary btn-sm" style="flex:1;font-size:11px;" onclick="runSelection(${game.id})">⚡ Set Now</button>` : ''}
+      <button class="btn-secondary btn-sm" style="font-size:11px;" onclick="showQuickAdd(${game.id})">➕ Add Players</button>
       <button class="btn-danger btn-sm" style="font-size:11px;" onclick="cancelGame(${game.id})">Cancel</button></div>`;
   }
 
@@ -864,6 +865,97 @@ async function editGame(gameId) {
     document.getElementById('edit-game-modal')?.remove();
     await fetchGames(); render();
   } catch(e) { showToast(e.message,'error'); }
+}
+
+// ═══ QUICK ADD PLAYERS (organizer) ═══════════════════════════
+async function showQuickAdd(gameId) {
+  const game = cachedGames.find(g => g.id === gameId);
+  if (!game) return;
+  // Ensure we have players for this game's group
+  if (!cachedPlayers.length) await fetchPlayers();
+  const signedUpIds = new Set(game.signups.map(s => s.player_id));
+  const available = cachedPlayers.filter(p => p.status === 'active' && !signedUpIds.has(p.player_id));
+  const sorted = sortPlayers(available, 'priority');
+
+  if (!sorted.length) { showToast('All players already signed up', 'info'); return; }
+
+  const rows = sorted.map(p => {
+    const prioLabel = p.priority !== 'standard' ? ` <span style="font-size:11px;opacity:0.5;">(${p.priority})</span>` : '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);" id="qa-row-${p.player_id}">
+      <span style="font-size:14px;">${esc(p.name)}${prioLabel}</span>
+      <button class="btn-primary btn-sm" style="font-size:11px;padding:4px 10px;" onclick="quickAddOne(${gameId},${p.player_id},this)">Add</button>
+    </div>`;
+  }).join('');
+
+  const html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;" id="quick-add-modal" onclick="if(event.target===this)this.remove()">
+    <div class="card" style="max-width:420px;width:100%;max-height:80vh;display:flex;flex-direction:column;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 style="font-size:16px;font-weight:700;">Add Players to Game</h3>
+        <button class="btn-secondary btn-sm" style="font-size:11px;" onclick="document.getElementById('quick-add-modal').remove()">✕</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn-primary" style="flex:1;font-size:13px;padding:8px;" onclick="quickAddAll(${gameId})">Add All (${sorted.length})</button>
+        <button class="btn-secondary" style="flex:1;font-size:13px;padding:8px;" onclick="quickAddRandom(${gameId},${game.cap_enabled ? game.cap : 0})">Add Random${game.cap_enabled ? ' ('+game.cap+')' : ''}</button>
+      </div>
+      <div id="qa-list" style="overflow-y:auto;flex:1;">${rows}</div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function quickAddOne(gameId, playerId, btn) {
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await api(`/games/${gameId}/add-player/${playerId}`, {method:'POST'});
+    const row = document.getElementById(`qa-row-${playerId}`);
+    if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
+  } catch(e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'Add'; }
+}
+
+async function quickAddAll(gameId) {
+  const btns = document.querySelectorAll('#qa-list button:not([disabled])');
+  for (const btn of btns) btn.disabled = true;
+  const game = cachedGames.find(g => g.id === gameId);
+  const signedUpIds = new Set(game.signups.map(s => s.player_id));
+  const toAdd = cachedPlayers.filter(p => p.status === 'active' && !signedUpIds.has(p.player_id));
+  let added = 0;
+  for (const p of toAdd) {
+    try {
+      await api(`/games/${gameId}/add-player/${p.player_id}`, {method:'POST'});
+      const row = document.getElementById(`qa-row-${p.player_id}`);
+      if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
+      added++;
+    } catch(e) { /* skip */ }
+  }
+  showToast(`Added ${added} player${added!==1?'s':''}`, 'success');
+  await fetchGames(); render();
+  document.getElementById('quick-add-modal')?.remove();
+}
+
+async function quickAddRandom(gameId, cap) {
+  const game = cachedGames.find(g => g.id === gameId);
+  const signedUpIds = new Set(game.signups.map(s => s.player_id));
+  const available = cachedPlayers.filter(p => p.status === 'active' && !signedUpIds.has(p.player_id));
+  // Shuffle
+  const shuffled = [...available].sort(() => Math.random() - 0.5);
+  const count = cap > 0 ? Math.min(cap, shuffled.length) : shuffled.length;
+  const toAdd = shuffled.slice(0, count);
+
+  const btns = document.querySelectorAll('#qa-list button:not([disabled])');
+  for (const btn of btns) btn.disabled = true;
+
+  let added = 0;
+  for (const p of toAdd) {
+    try {
+      await api(`/games/${gameId}/add-player/${p.player_id}`, {method:'POST'});
+      const row = document.getElementById(`qa-row-${p.player_id}`);
+      if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
+      added++;
+    } catch(e) { /* skip */ }
+  }
+  showToast(`Randomly added ${added} player${added!==1?'s':''}`, 'success');
+  await fetchGames(); render();
+  document.getElementById('quick-add-modal')?.remove();
 }
 
 // ═══ CREATE GAME ═════════════════════════════════════════════
