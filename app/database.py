@@ -164,6 +164,7 @@ DEFAULT_SETTINGS = {
     "default_location": "", "high_priority_delay_minutes": "60",
     "alternative_delay_minutes": "1440", "random_wait_period_minutes": "60",
     "notify_owner_new_signup": "1",
+    "notify_owner_player_drop": "1",
 }
 
 

@@ -1121,6 +1121,9 @@ function renderOwnerSettings() {
         <div style="display:flex;align-items:center;gap:8px;">
           <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="os-notify-new" ${s.notify_owner_new_signup?'checked':''}><span class="slider"></span></label>
           <span style="font-size:13px;">Notify organizers of new player signups</span></div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="os-notify-drop" ${s.notify_owner_player_drop?'checked':''}><span class="slider"></span></label>
+          <span style="font-size:13px;">Notify organizers when a player drops</span></div>
         <button class="btn-primary" onclick="saveOwnerSettings()">Save Settings</button>
       </div></div>
     <div class="card"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Locations</h3>${locList||'<p style="color:var(--text2);font-size:13px;">No locations yet.</p>'}
@@ -1145,6 +1148,7 @@ async function saveOwnerSettings() {
       alternative_delay_minutes: parseInt(document.getElementById('os-alt-delay').value),
       random_wait_period_minutes: parseInt(document.getElementById('os-rand-wait').value),
       notify_owner_new_signup: document.getElementById('os-notify-new').checked,
+      notify_owner_player_drop: document.getElementById('os-notify-drop').checked,
     })});
     showToast('Settings saved','success'); await fetchSettings(); render();
   } catch(e) { showToast(e.message,'error'); }

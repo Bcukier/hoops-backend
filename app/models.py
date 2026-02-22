@@ -183,6 +183,7 @@ class SettingsOut(BaseModel):
     alternative_delay_minutes: int
     random_wait_period_minutes: int
     notify_owner_new_signup: bool
+    notify_owner_player_drop: bool
     locations: list[LocationOut]
 
 class SettingsUpdate(BaseModel):
@@ -194,3 +195,4 @@ class SettingsUpdate(BaseModel):
     alternative_delay_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     random_wait_period_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_owner_new_signup: Optional[bool] = None
+    notify_owner_player_drop: Optional[bool] = None

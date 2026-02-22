@@ -881,6 +881,7 @@ async def get_group_settings(group_id: int, player_id: int = Depends(get_current
             alternative_delay_minutes=int(s.get("alternative_delay_minutes","1440")),
             random_wait_period_minutes=int(s.get("random_wait_period_minutes","60")),
             notify_owner_new_signup=s.get("notify_owner_new_signup","1")=="1",
+            notify_owner_player_drop=s.get("notify_owner_player_drop","1")=="1",
             locations=locs)
     finally:
         await db.close()
@@ -901,6 +902,7 @@ async def update_group_settings(group_id: int, req: SettingsUpdate,
             "alternative_delay_minutes": str(req.alternative_delay_minutes) if req.alternative_delay_minutes is not None else None,
             "random_wait_period_minutes": str(req.random_wait_period_minutes) if req.random_wait_period_minutes is not None else None,
             "notify_owner_new_signup": ("1" if req.notify_owner_new_signup else "0") if req.notify_owner_new_signup is not None else None,
+            "notify_owner_player_drop": ("1" if req.notify_owner_player_drop else "0") if req.notify_owner_player_drop is not None else None,
         }
         for key, val in mapping.items():
             if val is not None: await set_setting(db, key, val, group_id)
@@ -1268,7 +1270,7 @@ async def drop_from_game(game_id: int, player_id: int = Depends(get_current_play
         was_in = signup["status"] == "in"
         await db.execute("DELETE FROM game_signups WHERE game_id=? AND player_id=?", (game_id, player_id))
         await db.commit()
-        # Promote from waitlist if FCFS
+        # Promote from waitlist if FCFS, notify organizers of drop
         if was_in:
             cursor2 = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
             g = await cursor2.fetchone()
@@ -1282,7 +1284,10 @@ async def drop_from_game(game_id: int, player_id: int = Depends(get_current_play
                     await db.execute("UPDATE game_signups SET status='in' WHERE id=?", (next_up["id"],))
                     await db.commit()
                     bg_notify(notify_waitlist_promotion, game_id, next_up["player_id"])
-            bg_notify(notify_owner_player_drop, game_id, player_id)
+            if g:
+                drop_setting = await get_setting(db, "notify_owner_player_drop", g["group_id"])
+                if drop_setting != "0":
+                    bg_notify(notify_owner_player_drop, game_id, player_id)
         cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
         return await game_to_out(db, await cursor.fetchone())
     finally:
