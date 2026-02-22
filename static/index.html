@@ -897,7 +897,7 @@ function renderCreateGame() {
   let groupSelector = '';
   if (og.length > 1) {
     const gOpts = og.map(g => `<option value="${g.group_id}" ${g.group_id===gid?'selected':''}>${esc(g.group_name)}</option>`).join('');
-    groupSelector = `<div><label>Group</label><select id="cg-group">${gOpts}</select></div>`;
+    groupSelector = `<div><label>Group</label><select id="cg-group" onchange="changeOrgGroup(parseInt(this.value))">${gOpts}</select></div>`;
   }
 
   return `<div class="fade-in" style="max-width:600px;">
