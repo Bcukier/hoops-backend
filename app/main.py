@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Request, status, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
@@ -1741,6 +1741,14 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 @app.get("/privacy")
 async def privacy_page():
     return FileResponse(str(static_dir / "privacy.html"))
+
+@app.get("/terms")
+async def terms_page():
+    return RedirectResponse(url="/privacy#terms")
+
+@app.get("/sms-terms")
+async def sms_terms_page():
+    return RedirectResponse(url="/privacy#sms-terms")
 
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
