@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS players (
     force_password_change INTEGER DEFAULT 0,
     is_superuser INTEGER DEFAULT 0,
     email_verified INTEGER DEFAULT 0,
+    email_bounced INTEGER DEFAULT 0,
     unsubscribe_token TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -206,6 +207,7 @@ async def _run_migrations(db):
         ("players", "is_superuser", "INTEGER DEFAULT 0"),
         ("players", "email_verified", "INTEGER DEFAULT 0"),
         ("players", "unsubscribe_token", "TEXT"),
+        ("players", "email_bounced", "INTEGER DEFAULT 0"),
         ("games", "group_id", "INTEGER NOT NULL DEFAULT 0"),
         ("games", "random_high_auto", "INTEGER DEFAULT 1"),
         ("games", "batch_id", "TEXT"),

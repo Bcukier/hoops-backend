@@ -1161,6 +1161,7 @@ function renderPlayerSettings() {
     <h2 style="font-weight:800;font-size:24px;margin-bottom:20px;">My Settings</h2>
     <div class="card" style="margin-bottom:16px;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Profile</h3>
     ${!u.email_verified ? '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;">⚠️ Email not verified — you won\'t receive email notifications. <a style="color:var(--orange);cursor:pointer;font-weight:600;" onclick="resendVerification().then(()=>{currentPage=\'verify_email\';render();})">Verify now</a></div>' : ''}
+    ${u.email_bounced ? '<div style="background:#fde8e8;border:1px solid #e74c3c;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;">⚠️ <strong>Your last email bounced.</strong> Email notifications have been disabled. Please check that your email address is correct, then re-enable email notifications below.</div>' : ''}
     <div style="display:grid;gap:16px;">
       <div><label>Name</label><input id="ps-name" value="${esc(u.name)}"></div>
       <div><label>Email</label><input type="email" id="ps-email" value="${esc(u.email)}"></div>
@@ -1577,7 +1578,7 @@ function renderAdmin() {
       return `<tr>
         <td>${p.id}</td>
         <td>${esc(p.name)}</td>
-        <td style="font-size:12px;">${esc(p.email)}</td>
+        <td style="font-size:12px;">${esc(p.email)}${p.email_bounced?'<span title="Email bounced" style="color:#e74c3c;margin-left:4px;">⚠</span>':''}</td>
         <td>${groupBadges||'<span style="color:var(--text2);font-size:11px;">none</span>'}</td>
         <td>${p.is_superuser?'<span class="badge" style="background:var(--orange);color:#fff;font-size:11px;">SUPER</span>':''}</td>
         <td style="white-space:nowrap;">

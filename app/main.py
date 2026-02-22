@@ -150,6 +150,7 @@ async def player_out_from_db(db, player_id: int) -> PlayerOut:
         notif_pref=d["notif_pref"], force_password_change=bool(d.get("force_password_change",0)),
         is_superuser=bool(d.get("is_superuser",0)),
         email_verified=bool(d.get("email_verified",0)),
+        email_bounced=bool(d.get("email_bounced",0)),
         created_at=str(d["created_at"]), groups=groups, pending_invitations=invitations)
 
 
@@ -402,7 +403,12 @@ async def update_me(req: PlayerUpdate, player_id: int = Depends(get_current_play
             sets.append("email=?"); vals.append(email)
         if req.mobile is not None: sets.append("mobile=?"); vals.append(sanitize_string(req.mobile))
         if req.password is not None: sets.append("password_hash=?"); vals.append(hash_password(req.password)); sets.append("force_password_change=0")
-        if req.notif_pref is not None: sets.append("notif_pref=?"); vals.append(validate_notif_pref(req.notif_pref))
+        if req.notif_pref is not None:
+            new_pref = validate_notif_pref(req.notif_pref)
+            sets.append("notif_pref=?"); vals.append(new_pref)
+            # Clear bounce flag if user is re-enabling email
+            if "email" in new_pref:
+                sets.append("email_bounced=0")
         if not sets: raise HTTPException(400, "No fields to update")
         sets.append("updated_at=?"); vals.append(datetime.now(timezone.utc).isoformat())
         vals.append(player_id)
@@ -697,6 +703,81 @@ async def twilio_sms_webhook(request: Request):
 
 import os
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+SENDGRID_WEBHOOK_SECRET = os.environ.get("SENDGRID_WEBHOOK_SECRET", "")
+
+
+# ═════════════════════════════════════════════════════════════════
+# SENDGRID EVENT WEBHOOK — BOUNCE HANDLING
+# ═════════════════════════════════════════════════════════════════
+@app.post("/api/sendgrid/webhook")
+async def sendgrid_event_webhook(request: Request):
+    """Handle SendGrid Event Webhook — detect bounces and disable email notifications."""
+    import json as _json
+    raw_body = (await request.body()).decode("utf-8")
+
+    # Verify webhook signature if secret is configured
+    if SENDGRID_WEBHOOK_SECRET:
+        from sendgrid.helpers.eventwebhook import EventWebhook, EventWebhookHeader
+        try:
+            ew = EventWebhook(SENDGRID_WEBHOOK_SECRET)
+            signature = request.headers.get(EventWebhookHeader.SIGNATURE, "")
+            timestamp = request.headers.get(EventWebhookHeader.TIMESTAMP, "")
+            if not ew.verify_signature(signature, timestamp, raw_body):
+                logger.warning("📧 Invalid SendGrid webhook signature")
+                return HTMLResponse(status_code=403, content="Forbidden")
+        except Exception as e:
+            logger.warning(f"📧 SendGrid signature verification error: {e}")
+            return HTMLResponse(status_code=403, content="Forbidden")
+
+    try:
+        events = _json.loads(raw_body)
+    except Exception:
+        return {"status": "error", "message": "Invalid JSON"}
+
+    if not isinstance(events, list):
+        return {"status": "ok"}
+
+    # Process bounce and dropped events
+    bounce_events = [e for e in events if e.get("event") in ("bounce", "dropped")]
+    if not bounce_events:
+        return {"status": "ok"}
+
+    db = await get_db()
+    try:
+        for event in bounce_events:
+            email = (event.get("email") or "").strip().lower()
+            if not email:
+                continue
+
+            reason = event.get("reason", "")
+            event_type = event.get("event", "")
+            logger.info(f"📧 Email {event_type} for {email}: {reason}")
+
+            cursor = await db.execute(
+                "SELECT id, name, notif_pref FROM players WHERE email=? COLLATE NOCASE", (email,))
+            player = await cursor.fetchone()
+            if not player:
+                logger.info(f"📧 Bounce for unknown email: {email}")
+                continue
+
+            # Remove 'email' from notif_pref
+            current_pref = player["notif_pref"] or "none"
+            channels = [c.strip() for c in current_pref.split(",") if c.strip()]
+            channels = [c for c in channels if c != "email"]
+            new_pref = ",".join(channels) if channels else "none"
+
+            await db.execute(
+                "UPDATE players SET notif_pref=?, email_bounced=1 WHERE id=?",
+                (new_pref, player["id"]))
+            logger.info(
+                f"📧 Bounce handled: player {player['id']} ({player['name']}) "
+                f"pref {current_pref} → {new_pref}, email_bounced=1")
+
+        await db.commit()
+    finally:
+        await db.close()
+
+    return {"status": "ok", "processed": len(bounce_events)}
 
 
 # ═════════════════════════════════════════════════════════════════

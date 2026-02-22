@@ -43,6 +43,7 @@ class PlayerOut(BaseModel):
     force_password_change: bool = False
     is_superuser: bool = False
     email_verified: bool = False
+    email_bounced: bool = False
     created_at: str
     groups: list["GroupMembershipOut"] = []
     pending_invitations: list["InvitationOut"] = []
