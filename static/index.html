@@ -913,7 +913,7 @@ async function showQuickAdd(gameId) {
 async function quickAddOne(gameId, playerId, btn) {
   btn.disabled = true; btn.textContent = '...';
   try {
-    await api(`/games/${gameId}/add-player/${playerId}`, {method:'POST'});
+    await api(`/games/${gameId}/add-player/${playerId}?guaranteed=false`, {method:'POST'});
     const row = document.getElementById(`qa-row-${playerId}`);
     if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
   } catch(e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'Add'; }
@@ -928,7 +928,7 @@ async function quickAddAll(gameId) {
   let added = 0;
   for (const p of toAdd) {
     try {
-      await api(`/games/${gameId}/add-player/${p.player_id}`, {method:'POST'});
+      await api(`/games/${gameId}/add-player/${p.player_id}?guaranteed=false`, {method:'POST'});
       const row = document.getElementById(`qa-row-${p.player_id}`);
       if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
       added++;
@@ -954,7 +954,7 @@ async function quickAddRandom(gameId, cap) {
   let added = 0;
   for (const p of toAdd) {
     try {
-      await api(`/games/${gameId}/add-player/${p.player_id}`, {method:'POST'});
+      await api(`/games/${gameId}/add-player/${p.player_id}?guaranteed=false`, {method:'POST'});
       const row = document.getElementById(`qa-row-${p.player_id}`);
       if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
       added++;

@@ -1532,6 +1532,7 @@ async def drop_from_game(game_id: int, player_id: int = Depends(get_current_play
 
 @app.post("/api/games/{game_id}/add-player/{target_id}")
 async def add_player_to_game(game_id: int, target_id: int,
+                              guaranteed: bool = Query(True),
                               player_id: int = Depends(get_current_player_id)):
     db = await get_db()
     try:
@@ -1539,6 +1540,8 @@ async def add_player_to_game(game_id: int, target_id: int,
         g = await cursor.fetchone()
         if not g: raise HTTPException(404)
         await require_group_organizer(db, player_id, g["group_id"])
+
+        owner_added = 1 if guaranteed else 0
 
         # Determine correct status based on algorithm and game state
         if g["algorithm"] == "random" and not g["selection_done"]:
@@ -1552,8 +1555,8 @@ async def add_player_to_game(game_id: int, target_id: int,
             signup_status = "in"
 
         await db.execute(
-            "INSERT OR IGNORE INTO game_signups (game_id,player_id,status,owner_added) VALUES (?,?,?,1)",
-            (game_id, target_id, signup_status))
+            "INSERT OR IGNORE INTO game_signups (game_id,player_id,status,owner_added) VALUES (?,?,?,?)",
+            (game_id, target_id, signup_status, owner_added))
         await db.commit()
         cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
         return await game_to_out(db, await cursor.fetchone())
