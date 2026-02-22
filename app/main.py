@@ -1555,7 +1555,8 @@ async def add_player_to_game(game_id: int, target_id: int,
             signup_status = "in"
 
         await db.execute(
-            "INSERT OR IGNORE INTO game_signups (game_id,player_id,status,owner_added) VALUES (?,?,?,?)",
+            """INSERT INTO game_signups (game_id,player_id,status,owner_added) VALUES (?,?,?,?)
+               ON CONFLICT(game_id,player_id) DO UPDATE SET owner_added=excluded.owner_added""",
             (game_id, target_id, signup_status, owner_added))
         await db.commit()
         cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
@@ -1871,5 +1872,10 @@ async def sms_terms_page():
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     if full_path and (static_dir / full_path).exists():
-        return FileResponse(str(static_dir / full_path))
-    return FileResponse(str(static_dir / "index.html"))
+        resp = FileResponse(str(static_dir / full_path))
+    else:
+        resp = FileResponse(str(static_dir / "index.html"))
+    # Prevent browser from caching HTML/JS so deploys take effect immediately
+    if full_path.endswith(('.html', '.js')) or not full_path:
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
