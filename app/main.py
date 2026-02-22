@@ -597,6 +597,109 @@ async def unsubscribe_from_emails(token: str):
 
 
 # ═════════════════════════════════════════════════════════════════
+# TWILIO SMS WEBHOOK (opt-out / help)
+# ═════════════════════════════════════════════════════════════════
+STOP_KEYWORDS = {"stop", "end", "cancel", "unsubscribe", "quit"}
+HELP_KEYWORDS = {"help", "info"}
+
+def _twiml_response(message: str) -> HTMLResponse:
+    """Return a TwiML XML response."""
+    xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{message}</Message></Response>'
+    return HTMLResponse(content=xml, media_type="application/xml")
+
+def _normalize_phone(raw: str) -> str:
+    """Normalize a phone number to digits-only for DB matching."""
+    digits = "".join(c for c in raw if c.isdigit())
+    # Strip leading country code '1' for US numbers to match stored formats
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
+
+@app.post("/api/sms/webhook")
+async def twilio_sms_webhook(request: Request):
+    """Handle inbound SMS from Twilio — STOP opts out, HELP sends info."""
+    form = await request.form()
+    body = (form.get("Body") or "").strip().lower()
+    from_number = form.get("From") or ""
+
+    logger.info(f"📱 Inbound SMS from {from_number}: {body}")
+
+    # Validate Twilio signature if auth token is configured
+    if TWILIO_AUTH_TOKEN:
+        from twilio.request_validator import RequestValidator
+        validator = RequestValidator(TWILIO_AUTH_TOKEN)
+        # Reconstruct the full URL Twilio called
+        url = str(request.url)
+        # Use X-Forwarded-Proto if behind reverse proxy
+        if request.headers.get("x-forwarded-proto") == "https":
+            url = url.replace("http://", "https://", 1)
+        signature = request.headers.get("X-Twilio-Signature", "")
+        params = {k: v for k, v in form.items()}
+        if not validator.validate(url, params, signature):
+            logger.warning(f"📱 Invalid Twilio signature from {from_number}")
+            return HTMLResponse(status_code=403, content="Forbidden")
+
+    if not from_number:
+        return _twiml_response("Error processing your request.")
+
+    # Look up player by phone number
+    normalized = _normalize_phone(from_number)
+    if not normalized:
+        return _twiml_response("Error processing your request.")
+
+    db = await get_db()
+    try:
+        # Match by last 10 digits — handles various stored formats
+        cursor = await db.execute("""
+            SELECT id, name, notif_pref FROM players
+            WHERE REPLACE(REPLACE(REPLACE(REPLACE(mobile, ' ', ''), '-', ''), '(', ''), ')', '')
+                  LIKE ?
+        """, (f"%{normalized[-10:]}",))
+        player = await cursor.fetchone()
+
+        if body in STOP_KEYWORDS:
+            if not player:
+                return _twiml_response("You have been unsubscribed from GOATcommish. No more messages will be sent.")
+
+            # Remove SMS from their notification preference
+            current_pref = player["notif_pref"] or "none"
+            channels = [c.strip() for c in current_pref.split(",") if c.strip()]
+            channels = [c for c in channels if c != "sms"]
+            new_pref = ",".join(channels) if channels else "none"
+
+            await db.execute("UPDATE players SET notif_pref=? WHERE id=?", (new_pref, player["id"]))
+            await db.commit()
+            logger.info(f"📱 SMS opt-out: player {player['id']} ({player['name']}) pref {current_pref} → {new_pref}")
+
+            return _twiml_response(
+                "You have been unsubscribed from GOATcommish Game Alerts. "
+                "No more SMS messages will be sent. "
+                "Reply HELP for help or visit goatcommish.com to manage preferences."
+            )
+
+        elif body in HELP_KEYWORDS:
+            return _twiml_response(
+                "GOATcommish Game Alerts: Pickup basketball game notifications. "
+                "Msg frequency varies. Msg&data rates may apply. "
+                "Reply STOP to cancel. "
+                "For help: support@goatcommish.com or visit goatcommish.com"
+            )
+
+        else:
+            # Unknown keyword — send help info
+            return _twiml_response(
+                "GOATcommish: Reply STOP to unsubscribe or HELP for info. "
+                "Visit goatcommish.com to manage your account."
+            )
+    finally:
+        await db.close()
+
+
+import os
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+
+
+# ═════════════════════════════════════════════════════════════════
 # GROUP ENDPOINTS
 # ═════════════════════════════════════════════════════════════════
 @app.post("/api/groups")
