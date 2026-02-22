@@ -599,7 +599,7 @@ async function doSignup() {
 // ═══ GAMES ═══════════════════════════════════════════════════
 function renderGames() {
   if (loading) return renderSpinner();
-  const games = cachedGames.sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const games = cachedGames.filter(g => !g.closed).sort((a,b)=>new Date(a.date)-new Date(b.date));
   if (!games.length) return `<div class="fade-in" style="text-align:center;padding:60px 20px;">
     <div style="font-size:64px;margin-bottom:16px;"><img src="/static/icon-nav.jpeg?v=4" style="width:80px;height:80px;border-radius:12px;"></div>
     <h2 style="font-weight:700;margin-bottom:8px;">No Games Available</h2>
@@ -916,7 +916,7 @@ function addGameSlot() {
 function updateSlotCount() {
   const n = document.querySelectorAll('.cg-slot').length;
   const el = document.getElementById('cg-slot-count');
-  if (el) el.textContent = n > 1 ? `${n} games queued` : '';
+  if (el) el.textContent = n > 1 ? `${n-1} game${n-1>1?'s':''} queued + current` : '';
   const prev = document.getElementById('cg-send-prev');
   if (prev) prev.style.display = n > 1 ? 'block' : 'none';
 }
