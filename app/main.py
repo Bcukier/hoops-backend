@@ -1738,6 +1738,10 @@ async def admin_make_superuser(req: dict, player_id: int = Depends(get_current_p
 static_dir = Path(__file__).parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+@app.get("/privacy")
+async def privacy_page():
+    return FileResponse(str(static_dir / "privacy.html"))
+
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     if full_path and (static_dir / full_path).exists():
