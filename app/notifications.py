@@ -416,9 +416,8 @@ async def notify_owner_player_drop(
     for owner in await cursor.fetchall():
         await send_notification(
             db, owner["id"], owner["notif_pref"],
-            f"⚠️ Player Drop — {weekday}",
-            f"{player_name} dropped from the {weekday} game at {game['location']}.\n\n"
-            f"🕐 {weekday}, {nice_date}\n\n"
+            f"⚠️ Player Drop — {weekday} {nice_date}",
+            f"{player_name} dropped from {weekday} game on {nice_date} at {game['location']}.\n\n"
             f"Open the app to manage: https://www.goatcommish.com",
         )
 
@@ -448,9 +447,8 @@ async def notify_owners_new_signup(
     for owner in await cursor.fetchall():
         await send_notification(
             db, owner["id"], owner["notif_pref"],
-            f"👤 New Signup — {weekday}",
-            f"{player_name} signed up for the {weekday} game at {game['location']}.\n\n"
-            f"🕐 {weekday}, {nice_date}\n\n"
+            f"👤 New Signup — {weekday} {nice_date}",
+            f"{player_name} signed up for {weekday} game on {nice_date} at {game['location']}.\n\n"
             f"Open the app to manage: https://www.goatcommish.com",
         )
 
