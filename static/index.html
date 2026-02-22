@@ -1573,8 +1573,10 @@ function renderAdmin() {
       </div>` : '<p style="color:var(--text2);margin-top:16px;">Loading...</p>';
   } else if (adminTab === 'players') {
     const rows = adminData.players.map(p => {
-      const groupBadges = (p.groups||[]).map(g =>
-        `<span class="badge badge-blue" style="font-size:11px;">${esc(g.group_name)} (${g.role})</span>`).join(' ');
+      const groupBadges = (p.groups||[]).map(g => {
+        const sColor = g.status==='active'?'#27ae60':g.status==='invited'?'#3498db':g.status==='pending'?'#f39c12':'#e74c3c';
+        return `<span class="badge" style="background:${sColor};color:#fff;font-size:11px;">${esc(g.group_name)} (${g.role}/${g.status})</span>`;
+      }).join(' ');
       return `<tr>
         <td>${p.id}</td>
         <td>${esc(p.name)}</td>
@@ -1654,8 +1656,17 @@ async function adminDeleteGroup(id, name) {
 function adminEditPlayer(id) {
   const p = adminData.players.find(x => x.id === id);
   if (!p) return;
+  const groupRows = (p.groups||[]).map(g => {
+    const statuses = ['active','pending','invited','declined','removed_self'];
+    const opts = statuses.map(s => `<option value="${s}" ${g.status===s?'selected':''}>${s}</option>`).join('');
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">
+      <span style="flex:1;font-size:13px;font-weight:600;">${esc(g.group_name)}</span>
+      <select data-gid="${g.group_id}" class="ae-group-status" style="font-size:12px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);">${opts}</select>
+    </div>`;
+  }).join('');
+  const groupSection = (p.groups||[]).length ? `<div><label>Group Memberships</label><div style="margin-top:4px;">${groupRows}</div></div>` : '';
   const html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;" id="admin-modal" onclick="if(event.target===this)this.remove()">
-    <div class="card" style="max-width:420px;width:100%;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Edit Player</h3>
+    <div class="card" style="max-width:420px;width:100%;max-height:90vh;overflow-y:auto;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Edit Player</h3>
     <div style="display:grid;gap:12px;">
       <div><label>Name</label><input id="ae-name" value="${esc(p.name)}"></div>
       <div><label>Email</label><input id="ae-email" value="${esc(p.email)}"></div>
@@ -1664,6 +1675,7 @@ function adminEditPlayer(id) {
       <div style="display:flex;align-items:center;gap:12px;">
         <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="ae-super" ${p.is_superuser?'checked':''}><span class="slider"></span></label>
         <span style="font-size:14px;">Superuser</span></div>
+      ${groupSection}
       <div style="display:flex;gap:8px;">
         <button class="btn-primary" style="flex:1;" onclick="adminSavePlayer(${p.id})">Save</button>
         <button class="btn-secondary" onclick="document.getElementById('admin-modal').remove()">Cancel</button>
@@ -1683,6 +1695,16 @@ async function adminSavePlayer(id) {
   if (pw) data.password = pw;
   try {
     await api('/admin/players/'+id, {method:'PATCH', body: JSON.stringify(data)});
+    // Save group membership status changes
+    const selects = document.querySelectorAll('.ae-group-status');
+    for (const sel of selects) {
+      const gid = sel.dataset.gid;
+      const p = adminData.players.find(x => x.id === id);
+      const orig = (p?.groups||[]).find(g => g.group_id == gid);
+      if (orig && orig.status !== sel.value) {
+        await api(`/admin/players/${id}/groups/${gid}`, {method:'PATCH', body: JSON.stringify({status: sel.value})});
+      }
+    }
     document.getElementById('admin-modal')?.remove();
     showToast('Player updated','success');
     await fetchAdminData(); render();

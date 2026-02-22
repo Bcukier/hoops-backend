@@ -1798,6 +1798,40 @@ async def admin_delete_player(target_id: int, player_id: int = Depends(get_curre
         await db.close()
 
 
+@app.patch("/api/admin/players/{target_id}/groups/{group_id}")
+async def admin_update_membership(target_id: int, group_id: int, req: dict,
+                                   player_id: int = Depends(get_current_player_id)):
+    """Superuser: update a player's group membership status/role."""
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        sets, vals = [], []
+        if "status" in req:
+            if req["status"] not in ("active", "pending", "invited", "declined", "removed_self"):
+                raise HTTPException(400, "Invalid status")
+            sets.append("status=?"); vals.append(req["status"])
+        if "role" in req:
+            if req["role"] not in ("organizer", "player"):
+                raise HTTPException(400, "Invalid role")
+            sets.append("role=?"); vals.append(req["role"])
+        if "priority" in req:
+            if req["priority"] not in ("high", "standard", "low"):
+                raise HTTPException(400, "Invalid priority")
+            sets.append("priority=?"); vals.append(req["priority"])
+        if not sets:
+            raise HTTPException(400, "No fields to update")
+        vals.extend([group_id, target_id])
+        await db.execute(f"UPDATE group_members SET {','.join(sets)} WHERE group_id=? AND player_id=?", vals)
+        await db.commit()
+        # Recalculate global role
+        role = await get_player_role(db, target_id)
+        await db.execute("UPDATE players SET role=? WHERE id=?", (role, target_id))
+        await db.commit()
+        return {"message": "Membership updated"}
+    finally:
+        await db.close()
+
+
 @app.get("/api/admin/games")
 async def admin_list_games(player_id: int = Depends(get_current_player_id)):
     db = await get_db()
