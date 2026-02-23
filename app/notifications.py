@@ -440,8 +440,8 @@ async def notify_waitlist_promotion(
         return
     await send_notification(
         db, player_id, row["notif_pref"],
-        f"🎉 Spot Opened — You're IN for {weekday}!",
-        f"A spot opened up for the {weekday} game at {time_str} at {game['location']}. You're in! See you on the court!",
+        f"🎉 Spot Opened — You're IN for {weekday}.",
+        f"A spot opened up for the {weekday} game at {time_str} at {game['location']} ({nice_date}). You're in! See you on the court!",
         game_id=game_id,
     )
     await db.execute(

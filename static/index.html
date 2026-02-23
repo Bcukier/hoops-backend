@@ -752,10 +752,11 @@ function renderGameColumn(game) {
         }
       }
 
-      // Low priority
+      // Low priority (hide if game is already full)
+      const gameFull = game.cap_enabled && inGame.length >= game.cap;
       if (game.notify_low_status === 'completed') {
         steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--green);">✅</span> <span>Low priority notified</span></div>`);
-      } else if (game.notify_low_at) {
+      } else if (game.notify_low_at && !gameFull) {
         steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span>⏳</span> <span>Low priority <span id="cd-low-${game.id}" data-target="${game.notify_low_at}" class="cascade-cd"></span></span></div>`);
       }
 
