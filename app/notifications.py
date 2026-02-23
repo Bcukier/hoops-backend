@@ -67,10 +67,10 @@ def _send_email_sync(to_email: str, subject: str, body: str,
 
     # HTML version
     html_body = body.replace("\n", "<br>")
-    # Convert "Open the app...:\n<URL>" into a styled hyperlink in HTML
+    # Convert "Open the app...:\n<URL>" into a styled button in HTML
     html_body = re.sub(
         r'Open the app(.*?):<br>https?://[^\s<]+',
-        r'<a href="https://www.goatcommish.com" style="color:#ff6a2f;font-weight:bold;text-decoration:underline;">Open the app</a>\1.',
+        r'<a href="https://www.goatcommish.com" style="display:inline-block;padding:10px 24px;background:#ff6a2f;color:#fff;font-weight:bold;text-decoration:none;border-radius:6px;font-size:14px;">Open the app</a>\1',
         html_body,
     )
     # Linkify any remaining bare URLs (e.g. password reset links)
@@ -84,16 +84,14 @@ def _send_email_sync(to_email: str, subject: str, body: str,
             )
     html_body = ''.join(parts)
 
-    # Build unsubscribe footer
+    # Build unsubscribe footer — small hyperlinked text
     unsub_footer = ""
     base_url = os.environ.get("HOOPS_BASE_URL", "https://www.goatcommish.com")
     if unsubscribe_token:
-        unsub_buttons = ""
-        if group_id:
-            gname_display = f' "{group_name}"' if group_name else ''
-            unsub_buttons += f'<a href="{base_url}/api/unsubscribe/{unsubscribe_token}/group/{group_id}" style="display:inline-block;padding:8px 16px;margin:4px;font-size:12px;color:#e74c3c;border:1px solid #e74c3c;border-radius:6px;text-decoration:none;">Remove me from{gname_display} group</a>'
-        unsub_buttons += f'<a href="{base_url}/api/unsubscribe/{unsubscribe_token}/emails" style="display:inline-block;padding:8px 16px;margin:4px;font-size:12px;color:#999;border:1px solid #ccc;border-radius:6px;text-decoration:none;">Unsubscribe from all GOATcommish emails</a>'
-        unsub_footer = f'<div style="text-align:center;margin-top:16px;">{unsub_buttons}</div>'
+        unsub_links = []
+        unsub_links.append(f'<a href="{base_url}/#settings" style="color:#999;text-decoration:underline;">Modify my communication preferences</a>')
+        unsub_links.append(f'<a href="{base_url}/api/unsubscribe/{unsubscribe_token}/emails" style="color:#999;text-decoration:underline;">Unsubscribe from all emails</a>')
+        unsub_footer = f'<div style="text-align:center;margin-top:12px;font-size:11px;color:#999;">{" · ".join(unsub_links)}</div>'
 
     html = f"""\
     <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;">
@@ -101,7 +99,7 @@ def _send_email_sync(to_email: str, subject: str, body: str,
         <p style="color:#333;line-height:1.6;">{html_body}</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
         {unsub_footer}
-        <p style="color:#999;font-size:12px;text-align:center;">Sent by GOATcommish — Pickup Basketball</p>
+        <p style="color:#bbb;font-size:11px;text-align:center;margin-top:8px;">Sent by GOATcommish — Pickup Basketball</p>
     </div>"""
 
     message = Mail(
