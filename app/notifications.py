@@ -382,7 +382,14 @@ async def notify_selection_results(
     in_players: list[int],
     waitlist_players: list[dict],
 ):
-    """Notify players of their selection result."""
+    """Notify players of their selection result with full game details."""
+    # Look up game details
+    cursor = await db.execute("SELECT date, location FROM games WHERE id=?", (game_id,))
+    game = await cursor.fetchone()
+    if not game:
+        return
+    nice_date, weekday, time_str = _format_game_date(game["date"])
+
     for pid in in_players:
         cursor = await db.execute(
             "SELECT notif_pref FROM players WHERE id = ?", (pid,)
@@ -392,8 +399,8 @@ async def notify_selection_results(
             continue
         await send_notification(
             db, pid, row["notif_pref"],
-            "🏀 You're IN!",
-            "You've been selected to play! See you on the court.",
+            f"🏀 You're IN for {weekday}!",
+            f"You're in for {weekday} at {time_str} at {game['location']}. See you on the court!",
             game_id=game_id,
         )
 
@@ -408,8 +415,9 @@ async def notify_selection_results(
             continue
         await send_notification(
             db, pid, row["notif_pref"],
-            "📋 Waitlisted",
-            f"You're #{position} on the waitlist. We'll notify you if a spot opens up.",
+            f"📋 Waitlisted — {weekday}",
+            f"You're #{position} on the waitlist for the {weekday} game at {game['location']} ({nice_date}). "
+            f"Standby — we will notify you if a spot opens up.",
             game_id=game_id,
         )
 
@@ -420,6 +428,10 @@ async def notify_waitlist_promotion(
     player_id: int,
 ):
     """Notify a player they've been promoted from waitlist."""
+    cursor = await db.execute("SELECT date, location FROM games WHERE id=?", (game_id,))
+    game = await cursor.fetchone()
+    nice_date, weekday, time_str = _format_game_date(game["date"]) if game else ("", "", "")
+
     cursor = await db.execute(
         "SELECT notif_pref FROM players WHERE id = ?", (player_id,)
     )
@@ -428,8 +440,8 @@ async def notify_waitlist_promotion(
         return
     await send_notification(
         db, player_id, row["notif_pref"],
-        "🎉 Spot Opened — You're IN!",
-        "A spot opened up and you've been moved in. See you on the court!",
+        f"🎉 Spot Opened — You're IN for {weekday}!",
+        f"A spot opened up for the {weekday} game at {time_str} at {game['location']}. You're in! See you on the court!",
         game_id=game_id,
     )
     await db.execute(
