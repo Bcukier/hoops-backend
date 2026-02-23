@@ -189,11 +189,43 @@ class Scheduler:
             elif job_type == "run_selection":
                 if not g["selection_done"] and g["algorithm"] == "random":
                     logger.info(f"Job {job_id}: auto-running selection for game {game_id}")
-                    await run_random_selection(db, game_id)
+                    # Check if review mode is enabled
+                    review_setting = await get_setting(db, "review_before_publish", g["group_id"])
+                    skip_notify = review_setting == "1"
+                    await run_random_selection(db, game_id, skip_notify=skip_notify)
+                    if skip_notify:
+                        auto_pub_minutes = int(await get_setting(db, "auto_publish_minutes", g["group_id"]) or 30)
+                        pub_time = datetime.now(timezone.utc) + timedelta(minutes=auto_pub_minutes)
+                        await db.execute(
+                            """INSERT OR REPLACE INTO scheduler_jobs (game_id, job_type, scheduled_at)
+                               VALUES (?, 'auto_publish', ?)""",
+                            (game_id, pub_time.isoformat()))
+                        await db.commit()
+                        logger.info(f"Job {job_id}: selection done, pending review. Auto-publish at {pub_time}")
                 else:
                     logger.info(
                         f"Job {job_id}: selection already done for game {game_id}"
                     )
+
+            elif job_type == "auto_publish":
+                if g.get("pending_review"):
+                    logger.info(f"Job {job_id}: auto-publishing selection for game {game_id}")
+                    await db.execute("UPDATE games SET pending_review = 0 WHERE id = ?", (game_id,))
+                    await db.commit()
+                    # Send selection notifications
+                    cursor2 = await db.execute(
+                        "SELECT player_id FROM game_signups WHERE game_id=? AND status='in'", (game_id,))
+                    in_players = [r["player_id"] for r in await cursor2.fetchall()]
+                    cursor2 = await db.execute(
+                        "SELECT player_id FROM game_signups WHERE game_id=? AND status='waitlist' ORDER BY signed_up_at",
+                        (game_id,))
+                    waitlist_info = [{"player_id": r["player_id"], "position": i+1}
+                                     for i, r in enumerate(await cursor2.fetchall())]
+                    from app.notifications import notify_selection_results
+                    await notify_selection_results(db, game_id, in_players, waitlist_info)
+                    logger.info(f"Job {job_id}: auto-published game {game_id}")
+                else:
+                    logger.info(f"Job {job_id}: game {game_id} already published, skipping")
 
             elif job_type == "notify_high":
                 await self._notify_priority_tier(db, game_id, "high", g)

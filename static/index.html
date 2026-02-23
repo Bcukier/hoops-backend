@@ -698,7 +698,9 @@ function renderGameColumn(game) {
   } else if (started) actionBtn = `<span style="color:var(--text2);font-size:12px;">Game started</span>`;
 
   let statusBadge = '';
-  if (game.algorithm==='random' && !game.selection_done)
+  if (game.pending_review)
+    statusBadge = `<div style="margin-top:6px;"><span class="badge badge-orange" style="animation:pulse 2s infinite;">📋 Pending review</span></div>`;
+  else if (game.algorithm==='random' && !game.selection_done)
     statusBadge = `<div style="margin-top:6px;"><span class="badge badge-orange" style="animation:pulse 2s infinite;">⏳ Selection pending</span></div>`; else if (spotsLeft!==null && spotsLeft>0)
     statusBadge = `<div style="margin-top:6px;"><span class="badge badge-green">${spotsLeft} spot${spotsLeft!==1?'s':''} open</span></div>`;
   else if (spotsLeft===0)
@@ -707,15 +709,20 @@ function renderGameColumn(game) {
   let playerList = '';
   const isGameOrganizer = isOrganizer() && ownerViewMode && orgGroups().some(g => g.group_id === game.group_id);
   const showGuaranteed = isGameOrganizer;
+  const canManage = isGameOrganizer && !started && !game.closed && game.selection_done;
   if (game.selection_done || game.algorithm==='first_come') {
     inGame.forEach((s,i)=> {
       const guar = showGuaranteed && s.owner_added ? ' style="color:#4ade80;"' : '';
-      playerList += `<div class="player-slot in-game"><span class="num">${i+1}</span> <span${guar}>${esc(s.player_name)}</span></div>`;
+      const dropBtn = canManage ? `<button onclick="orgDropPlayer(${game.id},${s.player_id},'${esc(s.player_name).replace(/'/g,"\\'")}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px;padding:0 4px;margin-left:auto;opacity:0.6;" title="Remove player">✕</button>` : '';
+      playerList += `<div class="player-slot in-game" style="display:flex;align-items:center;"><span class="num">${i+1}</span> <span${guar}>${esc(s.player_name)}</span>${dropBtn}</div>`;
     });
     if (spotsLeft!==null) for(let i=0;i<spotsLeft;i++) playerList += `<div class="empty-slot"></div>`;
     if (waitlist.length>0) {
       playerList += `<div class="waitlist-divider">— Waitlist —</div>`;
-      waitlist.forEach((s,i)=> { playerList += `<div class="player-slot waitlist"><span class="num">W${i+1}</span> ${esc(s.player_name)}</div>`; });
+      waitlist.forEach((s,i)=> {
+        const dropBtn = canManage ? `<button onclick="orgDropPlayer(${game.id},${s.player_id},'${esc(s.player_name).replace(/'/g,"\\'")}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px;padding:0 4px;margin-left:auto;opacity:0.6;" title="Remove player">✕</button>` : '';
+        playerList += `<div class="player-slot waitlist" style="display:flex;align-items:center;"><span class="num">W${i+1}</span> <span>${esc(s.player_name)}</span>${dropBtn}</div>`;
+      });
     }
   } else {
     const all = [...game.signups].sort((a,b)=>new Date(a.signed_up_at)-new Date(b.signed_up_at));
@@ -745,8 +752,13 @@ function renderGameColumn(game) {
 
       // Selection (random only)
       if (game.algorithm === 'random') {
-        if (game.selection_done) {
-          steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--green);">✅</span> <span>Players selected</span></div>`);
+        if (game.selection_done && !game.pending_review) {
+          steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--green);">✅</span> <span>Players selected & notified</span></div>`);
+        } else if (game.selection_done && game.pending_review) {
+          steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--orange);">📋</span> <span style="color:var(--orange);font-weight:600;">Pending review</span></div>`);
+          if (game.auto_publish_at) {
+            steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span>⏳</span> <span>Auto-publish <span id="cd-pub-${game.id}" data-target="${game.auto_publish_at}" class="cascade-cd"></span></span></div>`);
+          }
         } else if (game.auto_selection_at) {
           steps.push(`<div style="display:flex;align-items:center;gap:6px;"><span>🎲</span> <span>Auto-select <span id="cd-sel-${game.id}" data-target="${game.auto_selection_at}" class="cascade-cd"></span></span></div>`);
         }
@@ -765,7 +777,15 @@ function renderGameColumn(game) {
       }
     }
 
-    ownerCtrl = `${cascadeStatus}<div style="padding:4px 16px 8px;display:flex;gap:4px;">
+    // Pending review banner + publish button
+    let reviewCtrl = '';
+    if (game.pending_review) {
+      reviewCtrl = `<div style="padding:4px 16px 8px;display:flex;gap:4px;">
+        <button class="btn-primary btn-sm" style="flex:1;font-size:11px;" onclick="publishSelection(${game.id})">✅ Publish & Notify</button>
+      </div>`;
+    }
+
+    ownerCtrl = `${cascadeStatus}${reviewCtrl}<div style="padding:4px 16px 8px;display:flex;gap:4px;">
       ${game.algorithm==='random'&&!game.selection_done ? `<button class="btn-primary btn-sm" style="flex:1;font-size:11px;" onclick="runSelection(${game.id})">⚡ Set Now</button>` : ''}
       <button class="btn-secondary btn-sm" style="font-size:11px;" onclick="showQuickAdd(${game.id})">➕ Add Players</button>
       <button class="btn-danger btn-sm" style="font-size:11px;" onclick="cancelGame(${game.id})">Cancel</button></div>`;
@@ -818,9 +838,50 @@ async function takeOff(gameId) {
 async function runSelection(gameId) {
   try {
     const r = await api(`/games/${gameId}/run-selection`, {method:'POST'});
-    showToast(`Selection done: ${r.in_count} in, ${r.waitlist_count} waitlisted`,'success');
+    if (r.pending_review) {
+      showToast(`Selection done: ${r.in_count} in, ${r.waitlist_count} waitlisted. Review before publishing.`,'success');
+    } else {
+      showToast(`Selection done: ${r.in_count} in, ${r.waitlist_count} waitlisted`,'success');
+    }
     await fetchGames(); render();
   } catch(e) { showToast(e.message,'error'); }
+}
+
+async function publishSelection(gameId) {
+  if (!confirm('Publish selection results and notify all players?')) return;
+  try {
+    await api(`/games/${gameId}/publish`, {method:'POST'});
+    showToast('Results published — players notified!','success');
+    await fetchGames(); render();
+  } catch(e) { showToast(e.message,'error'); }
+}
+
+async function orgDropPlayer(gameId, playerId, playerName) {
+  // Show modal with notify option
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `<div class="modal" style="max-width:380px;">
+    <h3 style="margin-bottom:12px;">Remove ${esc(playerName)}?</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">This player will be removed from the game. If they were selected, the next waitlisted player will be promoted.</p>
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:20px;cursor:pointer;">
+      <input type="checkbox" id="org-drop-notify" checked>
+      <span style="font-size:13px;">Notify affected players</span>
+    </label>
+    <div style="display:flex;gap:8px;">
+      <button class="btn-danger" style="flex:1;" id="org-drop-confirm">Remove</button>
+      <button class="btn-secondary" style="flex:1;" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  document.getElementById('org-drop-confirm').onclick = async () => {
+    const notify = document.getElementById('org-drop-notify').checked;
+    modal.remove();
+    try {
+      await api(`/games/${gameId}/organizer-drop/${playerId}?notify=${notify}`, {method:'POST'});
+      showToast(`${playerName} removed${notify ? ' — notifications sent' : ''}`,'success');
+      await fetchGames(); render();
+    } catch(e) { showToast(e.message,'error'); }
+  };
 }
 
 async function cancelGame(gameId) {
@@ -887,6 +948,11 @@ async function showQuickAdd(gameId) {
 
   if (!sorted.length) { showToast('All players already signed up', 'info'); return; }
 
+  const postSelection = game.selection_done;
+  const notifyRow = postSelection ? `<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
+    <input type="checkbox" id="qa-notify" checked>
+    <span style="font-size:13px;">Notify added players</span></label>` : '';
+
   const rows = sorted.map(p => {
     const prioLabel = p.priority !== 'standard' ? ` <span style="font-size:11px;opacity:0.5;">(${p.priority})</span>` : '';
     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);" id="qa-row-${p.player_id}">
@@ -901,6 +967,7 @@ async function showQuickAdd(gameId) {
         <h3 style="font-size:16px;font-weight:700;">Add Players to Game</h3>
         <button class="btn-secondary btn-sm" style="font-size:11px;" onclick="document.getElementById('quick-add-modal').remove()">✕</button>
       </div>
+      ${notifyRow}
       <div style="display:flex;gap:8px;margin-bottom:12px;">
         <button class="btn-primary" style="flex:1;font-size:13px;padding:8px;" onclick="quickAddAll(${gameId})">Add All (${sorted.length})</button>
         <button class="btn-secondary" style="flex:1;font-size:13px;padding:8px;" onclick="quickAddRandom(${gameId},${game.cap_enabled ? game.cap : 0})">Add Random${game.cap_enabled ? ' ('+game.cap+')' : ''}</button>
@@ -911,10 +978,15 @@ async function showQuickAdd(gameId) {
   document.body.insertAdjacentHTML('beforeend', html);
 }
 
+function qaNotifyParam() {
+  const cb = document.getElementById('qa-notify');
+  return cb ? `&notify=${cb.checked}` : '';
+}
+
 async function quickAddOne(gameId, playerId, btn) {
   btn.disabled = true; btn.textContent = '...';
   try {
-    await api(`/games/${gameId}/add-player/${playerId}?guaranteed=false`, {method:'POST'});
+    await api(`/games/${gameId}/add-player/${playerId}?guaranteed=false${qaNotifyParam()}`, {method:'POST'});
     const row = document.getElementById(`qa-row-${playerId}`);
     if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
   } catch(e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'Add'; }
@@ -926,10 +998,11 @@ async function quickAddAll(gameId) {
   const game = cachedGames.find(g => g.id === gameId);
   const signedUpIds = new Set(game.signups.map(s => s.player_id));
   const toAdd = cachedPlayers.filter(p => p.status === 'active' && !signedUpIds.has(p.player_id));
+  const notifyP = qaNotifyParam();
   let added = 0;
   for (const p of toAdd) {
     try {
-      await api(`/games/${gameId}/add-player/${p.player_id}?guaranteed=false`, {method:'POST'});
+      await api(`/games/${gameId}/add-player/${p.player_id}?guaranteed=false${notifyP}`, {method:'POST'});
       const row = document.getElementById(`qa-row-${p.player_id}`);
       if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
       added++;
@@ -952,10 +1025,11 @@ async function quickAddRandom(gameId, cap) {
   const btns = document.querySelectorAll('#qa-list button:not([disabled])');
   for (const btn of btns) btn.disabled = true;
 
+  const notifyP = qaNotifyParam();
   let added = 0;
   for (const p of toAdd) {
     try {
-      await api(`/games/${gameId}/add-player/${p.player_id}?guaranteed=false`, {method:'POST'});
+      await api(`/games/${gameId}/add-player/${p.player_id}?guaranteed=false${notifyP}`, {method:'POST'});
       const row = document.getElementById(`qa-row-${p.player_id}`);
       if (row) { row.style.opacity = '0.3'; row.querySelector('button').textContent = '✓'; }
       added++;
@@ -1289,6 +1363,18 @@ function renderOwnerSettings() {
           <span style="font-size:13px;">Notify organizers when a player drops</span></div>
         <button class="btn-primary" onclick="saveOwnerSettings()">Save Settings</button>
       </div></div>
+    <div class="card" style="margin-bottom:16px;"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Random Selection</h3>
+      <div style="display:grid;gap:16px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="os-review-pub" ${s.review_before_publish?'checked':''} onchange="document.getElementById('os-auto-pub').parentElement.style.opacity=this.checked?'1':'0.4'"><span class="slider"></span></label>
+          <span style="font-size:13px;">Review selection before publishing</span></div>
+        <div style="opacity:${s.review_before_publish?'1':'0.4'};transition:opacity 0.2s;">
+          <label>Auto-publish delay (minutes)</label>
+          <input type="number" id="os-auto-pub" value="${s.auto_publish_minutes}" min="1" max="1440">
+          <div style="font-size:11px;color:var(--text2);margin-top:4px;">Results auto-publish if not reviewed within this time</div>
+        </div>
+        <button class="btn-primary" onclick="saveOwnerSettings()">Save Settings</button>
+      </div></div>
     <div class="card"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">Locations</h3>${locList||'<p style="color:var(--text2);font-size:13px;">No locations yet.</p>'}
       <div style="display:grid;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
         <div style="display:flex;gap:8px;">
@@ -1312,6 +1398,8 @@ async function saveOwnerSettings() {
       random_wait_period_minutes: parseInt(document.getElementById('os-rand-wait').value),
       notify_owner_new_signup: document.getElementById('os-notify-new').checked,
       notify_owner_player_drop: document.getElementById('os-notify-drop').checked,
+      review_before_publish: document.getElementById('os-review-pub').checked,
+      auto_publish_minutes: parseInt(document.getElementById('os-auto-pub').value) || 30,
     })});
     showToast('Settings saved','success'); await fetchSettings(); render();
   } catch(e) { showToast(e.message,'error'); }

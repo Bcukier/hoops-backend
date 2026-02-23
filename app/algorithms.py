@@ -9,7 +9,7 @@ from app.notifications import notify_selection_results
 logger = logging.getLogger("hoops.algorithms")
 
 
-async def run_random_selection(db: aiosqlite.Connection, game_id: int):
+async def run_random_selection(db: aiosqlite.Connection, game_id: int, skip_notify: bool = False):
     """
     Execute the random selection algorithm for a game.
 
@@ -21,6 +21,9 @@ async def run_random_selection(db: aiosqlite.Connection, game_id: int):
     When random_high_auto is False:
       1. Owner-added players → always in
       2. ALL remaining players → pure random selection
+
+    If skip_notify is True, selection results are saved but notifications
+    are NOT sent (used for review-before-publish mode).
     """
     cursor = await db.execute("SELECT * FROM games WHERE id = ?", (game_id,))
     game = await cursor.fetchone()
@@ -107,18 +110,25 @@ async def run_random_selection(db: aiosqlite.Connection, game_id: int):
         )
 
     # Mark game as selection done
-    await db.execute(
-        "UPDATE games SET selection_done = 1, phase = 'active' WHERE id = ?",
-        (game_id,),
-    )
+    if skip_notify:
+        await db.execute(
+            "UPDATE games SET selection_done = 1, pending_review = 1, phase = 'active' WHERE id = ?",
+            (game_id,),
+        )
+    else:
+        await db.execute(
+            "UPDATE games SET selection_done = 1, pending_review = 0, phase = 'active' WHERE id = ?",
+            (game_id,),
+        )
     await db.commit()
 
-    # Notify all players of results
-    waitlist_info = [
-        {"player_id": s["player_id"], "position": i + 1}
-        for i, s in enumerate(waitlist_players)
-    ]
-    await notify_selection_results(db, game_id, in_players, waitlist_info)
+    # Notify all players of results (unless in review mode)
+    if not skip_notify:
+        waitlist_info = [
+            {"player_id": s["player_id"], "position": i + 1}
+            for i, s in enumerate(waitlist_players)
+        ]
+        await notify_selection_results(db, game_id, in_players, waitlist_info)
 
     logger.info(
         f"Game {game_id} selection: {len(in_players)} in, "

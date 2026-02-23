@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS games (
         CHECK(phase IN ('created','notifying_high','notifying_standard',
                         'notifying_low','signup','active','closed','cancelled')),
     selection_done INTEGER DEFAULT 0,
+    pending_review INTEGER DEFAULT 0,
     closed INTEGER DEFAULT 0,
     batch_id TEXT,
     random_high_auto INTEGER DEFAULT 1,
@@ -149,7 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_token_blacklist_expires ON token_blacklist(expire
 CREATE TABLE IF NOT EXISTS scheduler_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-    job_type TEXT NOT NULL CHECK(job_type IN ('notify_high','notify_standard','notify_low','run_selection')),
+    job_type TEXT NOT NULL CHECK(job_type IN ('notify_high','notify_standard','notify_low','run_selection','auto_publish')),
     scheduled_at TEXT NOT NULL, executed_at TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed')),
     error_message TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -177,6 +178,8 @@ DEFAULT_SETTINGS = {
     "alternative_delay_minutes": "1440", "random_wait_period_minutes": "60",
     "notify_owner_new_signup": "1",
     "notify_owner_player_drop": "1",
+    "review_before_publish": "0",
+    "auto_publish_minutes": "30",
 }
 
 
@@ -211,6 +214,7 @@ async def _run_migrations(db):
         ("games", "group_id", "INTEGER NOT NULL DEFAULT 0"),
         ("games", "random_high_auto", "INTEGER DEFAULT 1"),
         ("games", "batch_id", "TEXT"),
+        ("games", "pending_review", "INTEGER DEFAULT 0"),
         ("locations", "group_id", "INTEGER NOT NULL DEFAULT 0"),
         ("locations", "address", "TEXT DEFAULT ''"),
         ("locations", "sort_order", "INTEGER DEFAULT 0"),
@@ -257,6 +261,24 @@ async def _run_migrations(db):
         await db.execute("INSERT OR IGNORE INTO group_members_new SELECT * FROM group_members")
         await db.execute("DROP TABLE group_members")
         await db.execute("ALTER TABLE group_members_new RENAME TO group_members")
+        await db.commit()
+
+    # Migrate scheduler_jobs to support 'auto_publish' job type
+    cursor = await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='scheduler_jobs'")
+    row = await cursor.fetchone()
+    if row and 'auto_publish' not in (row["sql"] or ""):
+        await db.execute("""CREATE TABLE IF NOT EXISTS scheduler_jobs_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            job_type TEXT NOT NULL CHECK(job_type IN ('notify_high','notify_standard','notify_low','run_selection','auto_publish')),
+            scheduled_at TEXT NOT NULL, executed_at TEXT,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed')),
+            error_message TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(game_id, job_type))""")
+        await db.execute("INSERT OR IGNORE INTO scheduler_jobs_new SELECT * FROM scheduler_jobs")
+        await db.execute("DROP TABLE scheduler_jobs")
+        await db.execute("ALTER TABLE scheduler_jobs_new RENAME TO scheduler_jobs")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_scheduler_pending ON scheduler_jobs(status, scheduled_at)")
         await db.commit()
 
     # Check if groups exist already

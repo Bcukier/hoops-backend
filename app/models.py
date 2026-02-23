@@ -139,8 +139,10 @@ class GameOut(BaseModel):
     notified_at: Optional[str]
     phase: str
     selection_done: bool
+    pending_review: bool = False
     closed: bool
     auto_selection_at: Optional[str] = None
+    auto_publish_at: Optional[str] = None
     notify_standard_at: Optional[str] = None
     notify_low_at: Optional[str] = None
     notify_standard_status: Optional[str] = None
@@ -186,6 +188,8 @@ class SettingsOut(BaseModel):
     random_wait_period_minutes: int
     notify_owner_new_signup: bool
     notify_owner_player_drop: bool
+    review_before_publish: bool
+    auto_publish_minutes: int
     locations: list[LocationOut]
 
 class SettingsUpdate(BaseModel):
@@ -198,3 +202,5 @@ class SettingsUpdate(BaseModel):
     random_wait_period_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
     notify_owner_new_signup: Optional[bool] = None
     notify_owner_player_drop: Optional[bool] = None
+    review_before_publish: Optional[bool] = None
+    auto_publish_minutes: Optional[int] = Field(default=None, ge=1, le=1440)

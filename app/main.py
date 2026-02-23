@@ -22,7 +22,8 @@ from app.notifications import (
     notify_game_signup_open, notify_batch_games_signup_open,
     notify_waitlist_promotion, notify_owner_player_drop,
     notify_owners_new_signup, notify_game_edited,
-    notify_group_invitation, log_notification_config,
+    notify_group_invitation, notify_selection_results,
+    log_notification_config,
 )
 from app.security import (
     SecurityHeadersMiddleware, RateLimitMiddleware, check_rate_limit,
@@ -1199,6 +1200,8 @@ async def get_group_settings(group_id: int, player_id: int = Depends(get_current
             random_wait_period_minutes=int(s.get("random_wait_period_minutes","60")),
             notify_owner_new_signup=s.get("notify_owner_new_signup","1")=="1",
             notify_owner_player_drop=s.get("notify_owner_player_drop","1")=="1",
+            review_before_publish=s.get("review_before_publish","0")=="1",
+            auto_publish_minutes=int(s.get("auto_publish_minutes","30")),
             locations=locs)
     finally:
         await db.close()
@@ -1220,6 +1223,8 @@ async def update_group_settings(group_id: int, req: SettingsUpdate,
             "random_wait_period_minutes": str(req.random_wait_period_minutes) if req.random_wait_period_minutes is not None else None,
             "notify_owner_new_signup": ("1" if req.notify_owner_new_signup else "0") if req.notify_owner_new_signup is not None else None,
             "notify_owner_player_drop": ("1" if req.notify_owner_player_drop else "0") if req.notify_owner_player_drop is not None else None,
+            "review_before_publish": ("1" if req.review_before_publish else "0") if req.review_before_publish is not None else None,
+            "auto_publish_minutes": str(req.auto_publish_minutes) if req.auto_publish_minutes is not None else None,
         }
         for key, val in mapping.items():
             if val is not None: await set_setting(db, key, val, group_id)
@@ -1322,11 +1327,12 @@ async def game_to_out(db, g) -> GameOut:
                signed_up_at=str(r["signed_up_at"]), status=r["status"], owner_added=bool(r["owner_added"]))
                for r in await cursor.fetchall()]
     # Scheduler info
-    auto_sel, ns_at, nl_at, ns_st, nl_st = None, None, None, None, None
+    auto_sel, auto_pub, ns_at, nl_at, ns_st, nl_st = None, None, None, None, None, None
     cursor = await db.execute("SELECT * FROM scheduler_jobs WHERE game_id=?", (gid,))
     for j in await cursor.fetchall():
         jd = dict(j)
         if jd["job_type"] == "run_selection": auto_sel = jd["scheduled_at"]
+        elif jd["job_type"] == "auto_publish": auto_pub = jd["scheduled_at"]
         elif jd["job_type"] == "notify_standard": ns_at = jd["scheduled_at"]; ns_st = jd["status"]
         elif jd["job_type"] == "notify_low": nl_at = jd["scheduled_at"]; nl_st = jd["status"]
     return GameOut(
@@ -1335,8 +1341,11 @@ async def game_to_out(db, g) -> GameOut:
         cap=gd["cap"], cap_enabled=bool(gd["cap_enabled"]),
         created_by=gd["created_by"], created_at=str(gd["created_at"]),
         notified_at=gd.get("notified_at"), phase=gd["phase"],
-        selection_done=bool(gd["selection_done"]), closed=bool(gd["closed"]),
-        auto_selection_at=auto_sel, notify_standard_at=ns_at, notify_low_at=nl_at,
+        selection_done=bool(gd["selection_done"]),
+        pending_review=bool(gd.get("pending_review", 0)),
+        closed=bool(gd["closed"]),
+        auto_selection_at=auto_sel, auto_publish_at=auto_pub,
+        notify_standard_at=ns_at, notify_low_at=nl_at,
         notify_standard_status=ns_st, notify_low_status=nl_st,
         batch_id=gd.get("batch_id"), random_high_auto=bool(gd.get("random_high_auto",1)),
         signups=signups)
@@ -1533,8 +1542,127 @@ async def run_selection(game_id: int, player_id: int = Depends(get_current_playe
         if not g: raise HTTPException(404)
         await require_group_organizer(db, player_id, g["group_id"])
         if g["algorithm"] != "random": raise HTTPException(400, "Not a random game")
-        result = await run_random_selection(db, game_id)
+
+        # Check if review-before-publish is enabled
+        review_setting = await get_setting(db, "review_before_publish", g["group_id"])
+        skip_notify = review_setting == "1"
+
+        result = await run_random_selection(db, game_id, skip_notify=skip_notify)
+
+        # If review mode, schedule auto-publish
+        if skip_notify:
+            auto_pub_minutes = int(await get_setting(db, "auto_publish_minutes", g["group_id"]) or 30)
+            pub_time = datetime.now(timezone.utc) + timedelta(minutes=auto_pub_minutes)
+            await db.execute(
+                """INSERT OR REPLACE INTO scheduler_jobs (game_id, job_type, scheduled_at)
+                   VALUES (?, 'auto_publish', ?)""",
+                (game_id, pub_time.isoformat()))
+            await db.commit()
+            result["pending_review"] = True
+
         return result
+    finally:
+        await db.close()
+
+
+@app.post("/api/games/{game_id}/publish")
+async def publish_selection(game_id: int, player_id: int = Depends(get_current_player_id)):
+    """Publish pending review results — sends notifications to all players."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
+        g = await cursor.fetchone()
+        if not g: raise HTTPException(404)
+        await require_group_organizer(db, player_id, g["group_id"])
+        if not g["pending_review"]: raise HTTPException(400, "Game is not pending review")
+
+        # Clear pending review
+        await db.execute("UPDATE games SET pending_review = 0 WHERE id = ?", (game_id,))
+        # Cancel auto-publish job
+        await db.execute(
+            "UPDATE scheduler_jobs SET status='completed' WHERE game_id=? AND job_type='auto_publish' AND status='pending'",
+            (game_id,))
+        await db.commit()
+
+        # Send notifications
+        cursor = await db.execute(
+            "SELECT player_id FROM game_signups WHERE game_id=? AND status='in'", (game_id,))
+        in_players = [r["player_id"] for r in await cursor.fetchall()]
+        cursor = await db.execute(
+            "SELECT player_id FROM game_signups WHERE game_id=? AND status='waitlist' ORDER BY signed_up_at",
+            (game_id,))
+        waitlist_info = [{"player_id": r["player_id"], "position": i+1}
+                         for i, r in enumerate(await cursor.fetchall())]
+        bg_notify(notify_selection_results, game_id, in_players, waitlist_info)
+
+        cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
+        return await game_to_out(db, await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+@app.post("/api/games/{game_id}/organizer-drop/{target_id}")
+async def organizer_drop_player(game_id: int, target_id: int,
+                                 notify: bool = Query(False),
+                                 player_id: int = Depends(get_current_player_id)):
+    """Organizer drops a player from a game. Optionally auto-promotes waitlist and notifies."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
+        g = await cursor.fetchone()
+        if not g: raise HTTPException(404)
+        await require_group_organizer(db, player_id, g["group_id"])
+
+        # Check the player is signed up
+        cursor = await db.execute(
+            "SELECT * FROM game_signups WHERE game_id=? AND player_id=?", (game_id, target_id))
+        signup = await cursor.fetchone()
+        if not signup: raise HTTPException(404, "Player not signed up")
+        was_in = signup["status"] == "in"
+
+        # Remove the player
+        await db.execute("DELETE FROM game_signups WHERE game_id=? AND player_id=?", (game_id, target_id))
+        await db.commit()
+
+        promoted_player_id = None
+        # Auto-promote from waitlist if the dropped player was 'in'
+        if was_in and g["selection_done"]:
+            cursor2 = await db.execute(
+                """SELECT id, player_id FROM game_signups
+                   WHERE game_id=? AND status='waitlist'
+                   ORDER BY signed_up_at LIMIT 1""", (game_id,))
+            next_up = await cursor2.fetchone()
+            if next_up:
+                await db.execute("UPDATE game_signups SET status='in' WHERE id=?", (next_up["id"],))
+                await db.commit()
+                promoted_player_id = next_up["player_id"]
+
+        # Send notifications if requested
+        if notify and was_in:
+            from app.notifications import send_notification, _format_game_date
+            nice_date, weekday, time_str = _format_game_date(g["date"])
+            # Notify dropped player
+            cursor3 = await db.execute("SELECT notif_pref FROM players WHERE id=?", (target_id,))
+            prow = await cursor3.fetchone()
+            if prow:
+                async def _notify_dropped():
+                    ndb = await get_db()
+                    try:
+                        await send_notification(
+                            ndb, target_id, prow["notif_pref"],
+                            f"⚠️ Removed from {weekday} game",
+                            f"You've been removed from the {weekday} game at {g['location']} ({nice_date}). "
+                            f"Contact your organizer if you have questions.",
+                            game_id=game_id)
+                    finally:
+                        await ndb.close()
+                asyncio.create_task(_notify_dropped())
+            # Notify promoted player
+            if promoted_player_id:
+                bg_notify(notify_waitlist_promotion, game_id, promoted_player_id)
+
+        cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
+        return await game_to_out(db, await cursor.fetchone())
     finally:
         await db.close()
 
@@ -1614,6 +1742,7 @@ async def drop_from_game(game_id: int, player_id: int = Depends(get_current_play
 @app.post("/api/games/{game_id}/add-player/{target_id}")
 async def add_player_to_game(game_id: int, target_id: int,
                               guaranteed: bool = Query(True),
+                              notify: bool = Query(False),
                               player_id: int = Depends(get_current_player_id)):
     db = await get_db()
     try:
@@ -1627,7 +1756,7 @@ async def add_player_to_game(game_id: int, target_id: int,
         # Determine correct status based on algorithm and game state
         if g["algorithm"] == "random" and not g["selection_done"]:
             signup_status = "pending"
-        elif g["algorithm"] == "first_come" and g["cap_enabled"]:
+        elif g["cap_enabled"]:
             cursor2 = await db.execute(
                 "SELECT COUNT(*) as cnt FROM game_signups WHERE game_id=? AND status='in'", (game_id,))
             cnt = (await cursor2.fetchone())["cnt"]
@@ -1637,9 +1766,29 @@ async def add_player_to_game(game_id: int, target_id: int,
 
         await db.execute(
             """INSERT INTO game_signups (game_id,player_id,status,owner_added) VALUES (?,?,?,?)
-               ON CONFLICT(game_id,player_id) DO UPDATE SET owner_added=excluded.owner_added""",
+               ON CONFLICT(game_id,player_id) DO UPDATE SET owner_added=excluded.owner_added, status=excluded.status""",
             (game_id, target_id, signup_status, owner_added))
         await db.commit()
+
+        # Notify added player if requested and game is post-selection
+        if notify and g["selection_done"] and signup_status == "in":
+            from app.notifications import send_notification, _format_game_date
+            nice_date, weekday, time_str = _format_game_date(g["date"])
+            cursor3 = await db.execute("SELECT notif_pref FROM players WHERE id=?", (target_id,))
+            prow = await cursor3.fetchone()
+            if prow:
+                async def _notify_added():
+                    ndb = await get_db()
+                    try:
+                        await send_notification(
+                            ndb, target_id, prow["notif_pref"],
+                            f"🏀 You're IN for {weekday}!",
+                            f"You've been added to the {weekday} game at {time_str} at {g['location']}. See you on the court!",
+                            game_id=game_id)
+                    finally:
+                        await ndb.close()
+                asyncio.create_task(_notify_added())
+
         cursor = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
         return await game_to_out(db, await cursor.fetchone())
     finally:
