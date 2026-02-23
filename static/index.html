@@ -1555,7 +1555,7 @@ function renderAddPlayer() {
     </div>
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
       <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;">Import CSV</h3>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">CSV: name, email, mobile (one per line). New players auto-added; existing players get invitations.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Paste: name, email, mobile (one per line). Supports comma, tab, or semicolon-separated. New players auto-added; existing players get invitations.</p>
       <textarea id="csv-import" rows="4" placeholder="John Doe,john@email.com,555-0123"></textarea>
       <button class="btn-secondary" style="margin-top:8px;width:100%;" onclick="importCSV()">Import Players</button>
     </div></div>`;
@@ -1599,8 +1599,13 @@ async function importCSV() {
   const gid = activeOrgGroupId();
   const text = document.getElementById('csv-import').value.trim();
   if(!text) return;
-  const hasHeader = text.toLowerCase().startsWith('name');
-  const csvText = hasHeader ? text : 'name,email,mobile\n' + text;
+  const hasHeader = /^name[\t,;]/i.test(text);
+  // Normalize: replace tabs with commas if tab-separated
+  let normalized = text;
+  if (text.includes('\t')) {
+    normalized = text.split('\n').map(line => line.split('\t').join(',')).join('\n');
+  }
+  const csvText = hasHeader ? normalized : 'name,email,mobile\n' + normalized;
   const blob = new Blob([csvText], {type:'text/csv'});
   const formData = new FormData();
   formData.append('file', blob, 'import.csv');
@@ -1609,7 +1614,14 @@ async function importCSV() {
     const res = await fetch(API_BASE + `/groups/${gid}/players/import`, {
       method:'POST', headers:{'Authorization':`Bearer ${token}`}, body:formData
     });
-    const data = await res.json();
+    let data;
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const txt = await res.text();
+      throw new Error(`Import failed (${res.status}): ${txt.substring(0, 100)}`);
+    }
     if(!res.ok) throw new Error(data.detail||'Import failed');
     let msg = [];
     if(data.added) msg.push(`${data.added} added`);

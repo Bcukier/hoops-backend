@@ -1125,14 +1125,32 @@ async def import_players_csv(group_id: int, file: UploadFile = File(...),
     db = await get_db()
     try:
         await require_group_organizer(db, player_id, group_id)
-        content = (await file.read()).decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(content))
+        raw = (await file.read()).decode("utf-8-sig")
+        content = raw.strip()
+        if not content:
+            raise HTTPException(400, "Empty file")
+
+        # Auto-detect delimiter (tab, semicolon, or comma)
+        first_line = content.split('\n')[0]
+        if '\t' in first_line:
+            delimiter = '\t'
+        elif ';' in first_line and ',' not in first_line:
+            delimiter = ';'
+        else:
+            delimiter = ','
+
+        reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+        # Normalize field names (strip whitespace, lowercase)
+        if reader.fieldnames:
+            reader.fieldnames = [f.strip().lower() for f in reader.fieldnames]
+
         added, skipped, invited = 0, 0, 0
         for row in reader:
-            name = sanitize_string(row.get("name","").strip())
-            email = row.get("email","").strip().lower()
-            mobile = sanitize_string(row.get("mobile","").strip())
+            name = sanitize_string((row.get("name","") or "").strip())
+            email = (row.get("email","") or "").strip().lower()
+            mobile = sanitize_string((row.get("mobile","") or row.get("phone","") or "").strip())
             if not name or not email: skipped += 1; continue
+            if not validate_email_format(email): skipped += 1; continue
             cursor = await db.execute("SELECT id FROM players WHERE email=? COLLATE NOCASE", (email,))
             existing = await cursor.fetchone()
             if existing:
