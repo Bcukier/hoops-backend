@@ -170,7 +170,7 @@ let cachedGames = [];
 let cachedPlayers = [];
 let cachedSettings = null;
 let cachedLocations = [];
-let adminData = { overview: null, players: [], games: [], groups: [] };
+let adminData = { overview: null, players: [], games: [], groups: [], scheduler: {jobs:[]} };
 let adminTab = 'overview';
 
 let mgmtTab = 'roster';
@@ -1635,17 +1635,18 @@ async function importCSV() {
 // ═══ ADMIN / SUPERUSER ═══════════════════════════════════════
 async function fetchAdminData() {
   try {
-    const [overview, players, games, groups] = await Promise.all([
-      api('/admin/overview'), api('/admin/players'), api('/admin/games'), api('/admin/groups')
+    const [overview, players, games, groups, scheduler] = await Promise.all([
+      api('/admin/overview'), api('/admin/players'), api('/admin/games'), api('/admin/groups'),
+      api('/admin/scheduler').catch(() => ({jobs:[]}))
     ]);
-    adminData = { overview, players, games, groups };
+    adminData = { overview, players, games, groups, scheduler };
   } catch(e) { console.error('Admin fetch error:', e); }
 }
 
 function renderAdmin() {
   if (!isSuperuser()) return '<p>Access denied</p>';
   const ov = adminData.overview;
-  const tabs = ['overview','players','games','groups'].map(t =>
+  const tabs = ['overview','players','games','groups','scheduler'].map(t =>
     `<button class="btn-secondary btn-sm ${adminTab===t?'active':''}" onclick="adminTab='${t}';render()">${t.charAt(0).toUpperCase()+t.slice(1)}</button>`
   ).join('');
 
@@ -1726,6 +1727,25 @@ function renderAdmin() {
     body = `<div style="overflow-x:auto;margin-top:16px;"><table class="data-table">
       <thead><tr><th>ID</th><th>Name</th><th>Members</th><th>Games</th><th>Actions</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
+  } else if (adminTab === 'scheduler') {
+    const jobs = (adminData.scheduler?.jobs || []);
+    const rows = jobs.map(j => {
+      const sColor = j.status==='completed'?'#27ae60':j.status==='pending'?'#f39c12':j.status==='running'?'#3498db':'#e74c3c';
+      const sched = new Date(j.scheduled_at).toLocaleString();
+      const exec = j.executed_at ? new Date(j.executed_at).toLocaleString() : '-';
+      return `<tr>
+        <td>${j.id}</td><td>${j.game_id}</td>
+        <td><span class="badge" style="background:${sColor};color:#fff;font-size:11px;">${j.job_type}</span></td>
+        <td style="font-size:12px;">${sched}</td>
+        <td><span class="badge" style="background:${sColor};color:#fff;font-size:11px;">${j.status}</span></td>
+        <td style="font-size:12px;">${exec}</td>
+        <td style="font-size:11px;">${j.algorithm||''} ${j.selection_done?'✅sel':''} ${j.phase||''}</td>
+        <td style="font-size:11px;color:#e74c3c;">${j.error_message||''}</td>
+      </tr>`;
+    }).join('');
+    body = `<div style="overflow-x:auto;margin-top:16px;"><table class="data-table">
+      <thead><tr><th>ID</th><th>Game</th><th>Type</th><th>Scheduled</th><th>Status</th><th>Executed</th><th>Game Info</th><th>Error</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="8" style="text-align:center;color:var(--text2);">No jobs found</td></tr>'}</tbody></table></div>`;
   }
 
   return `<div class="fade-in" style="max-width:900px;">
@@ -1911,7 +1931,7 @@ async function doLogout() {
   try { await api('/auth/logout',{method:'POST'}); } catch {}
   clearToken(); currentUser = null; currentPage = 'login';
   cachedGames=[]; cachedPlayers=[]; cachedSettings=null; cachedLocations=[];
-  adminData={ overview:null, players:[], games:[], groups:[] }; adminTab='overview';
+  adminData={ overview:null, players:[], games:[], groups:[], scheduler:{jobs:[]} }; adminTab='overview';
   stopGameRefresh();
   render();
 }

@@ -2133,6 +2133,25 @@ async def admin_make_superuser(req: dict, player_id: int = Depends(get_current_p
         await db.close()
 
 
+@app.get("/api/admin/scheduler")
+async def admin_scheduler_jobs(player_id: int = Depends(get_current_player_id)):
+    """View recent scheduler jobs for diagnostics."""
+    db = await get_db()
+    try:
+        await require_superuser(db, player_id)
+        cursor = await db.execute(
+            """SELECT sj.*, g.date as game_date, g.algorithm, g.selection_done, g.closed, g.phase,
+                      g.pending_review, g.group_id
+               FROM scheduler_jobs sj
+               JOIN games g ON g.id = sj.game_id
+               ORDER BY sj.scheduled_at DESC
+               LIMIT 50""")
+        jobs = [dict(r) for r in await cursor.fetchall()]
+        return {"jobs": jobs}
+    finally:
+        await db.close()
+
+
 # ═════════════════════════════════════════════════════════════════
 # STATIC FILES
 # ═════════════════════════════════════════════════════════════════
