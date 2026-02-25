@@ -1381,16 +1381,18 @@ async def list_games(view: str = Query("player"), player_id: int = Depends(get_c
             org_gids = await get_organizer_group_ids(db, player_id)
             if not org_gids: return []
             placeholders = ",".join("?" * len(org_gids))
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
             cursor = await db.execute(
                 f"""SELECT * FROM games WHERE group_id IN ({placeholders})
-                    ORDER BY date DESC""", org_gids)
+                    AND closed=0 AND date > ? ORDER BY date ASC""", org_gids + [cutoff])
         else:
             my_gids = await get_player_group_ids(db, player_id)
             if not my_gids: return []
             placeholders = ",".join("?" * len(my_gids))
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
             cursor = await db.execute(
                 f"""SELECT * FROM games WHERE group_id IN ({placeholders})
-                    AND closed=0 ORDER BY date ASC""", my_gids)
+                    AND closed=0 AND date > ? ORDER BY date ASC""", my_gids + [cutoff])
         games = await cursor.fetchall()
         return [await game_to_out(db, g) for g in games]
     finally:
