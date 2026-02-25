@@ -398,7 +398,11 @@ async def notify_selection_results(
         await send_notification(
             db, pid, row["notif_pref"],
             f"🏀 You're IN for {weekday}!",
-            f"You're in for {weekday} at {time_str} at {game['location']}. See you on the court!",
+            f"You're in for {weekday} pickup basketball!\n\n"
+            f"📍 {game['location']}\n"
+            f"🕐 {nice_date}\n\n"
+            f"See you on the court!\n\n"
+            f"Open the app to view:\nhttps://www.goatcommish.com",
             game_id=game_id,
         )
 
@@ -414,8 +418,11 @@ async def notify_selection_results(
         await send_notification(
             db, pid, row["notif_pref"],
             f"📋 Waitlisted — {weekday}",
-            f"You're #{position} on the waitlist for the {weekday} game at {game['location']} ({nice_date}). "
-            f"Standby — we will notify you if a spot opens up.",
+            f"You're #{position} on the waitlist for {weekday} pickup basketball.\n\n"
+            f"📍 {game['location']}\n"
+            f"🕐 {nice_date}\n\n"
+            f"Standby — we'll notify you if a spot opens up.\n\n"
+            f"Open the app to view:\nhttps://www.goatcommish.com",
             game_id=game_id,
         )
 
@@ -438,8 +445,12 @@ async def notify_waitlist_promotion(
         return
     await send_notification(
         db, player_id, row["notif_pref"],
-        f"🎉 Spot Opened — You're IN for {weekday}.",
-        f"A spot opened up for the {weekday} game at {time_str} at {game['location']} ({nice_date}). You're in! See you on the court!",
+        f"🎉 Spot Opened — You're IN for {weekday}!",
+        f"A spot opened up and you've been promoted from the waitlist!\n\n"
+        f"📍 {game['location']}\n"
+        f"🕐 {nice_date}\n\n"
+        f"See you on the court!\n\n"
+        f"Open the app to view:\nhttps://www.goatcommish.com",
         game_id=game_id,
     )
     await db.execute(
@@ -524,7 +535,7 @@ async def notify_game_cancelled(
     game_location: str,
 ):
     """Notify players that a game has been cancelled."""
-    nice_date, weekday, _ = _format_game_date(game_date)
+    nice_date, weekday, time_str = _format_game_date(game_date)
     subject = f"❌ Game Cancelled — {weekday}"
 
     for pid in player_ids:
@@ -538,8 +549,9 @@ async def notify_game_cancelled(
         body = (
             f"The {weekday} game has been cancelled.\n\n"
             f"📍 {game_location}\n"
-            f"🕐 {weekday}, {nice_date}\n\n"
-            f"We'll let you know when the next game is scheduled."
+            f"🕐 {nice_date}\n\n"
+            f"We'll let you know when the next game is scheduled.\n\n"
+            f"Open the app to view:\nhttps://www.goatcommish.com"
         )
         await send_notification(db, pid, notif_pref, subject, body, game_id=game_id)
 

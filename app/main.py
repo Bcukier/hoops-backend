@@ -1671,8 +1671,11 @@ async def organizer_drop_player(game_id: int, target_id: int,
                         await send_notification(
                             ndb, target_id, prow["notif_pref"],
                             f"⚠️ Removed from {weekday} game",
-                            f"You've been removed from the {weekday} game at {g['location']} ({nice_date}). "
-                            f"Contact your organizer if you have questions.",
+                            f"You've been removed from the {weekday} game.\n\n"
+                            f"📍 {g['location']}\n"
+                            f"🕐 {nice_date}\n\n"
+                            f"Contact your organizer if you have questions.\n\n"
+                            f"Open the app to view:\nhttps://www.goatcommish.com",
                             game_id=game_id)
                     finally:
                         await ndb.close()
@@ -1803,7 +1806,11 @@ async def add_player_to_game(game_id: int, target_id: int,
                         await send_notification(
                             ndb, target_id, prow["notif_pref"],
                             f"🏀 You're IN for {weekday}!",
-                            f"You've been added to the {weekday} game at {time_str} at {g['location']}. See you on the court!",
+                            f"You've been added to the {weekday} game!\n\n"
+                            f"📍 {g['location']}\n"
+                            f"🕐 {nice_date}\n\n"
+                            f"See you on the court!\n\n"
+                            f"Open the app to view:\nhttps://www.goatcommish.com",
                             game_id=game_id)
                     finally:
                         await ndb.close()
