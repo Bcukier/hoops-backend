@@ -341,6 +341,7 @@ function render() {
   if (currentPage === 'reset_password') { app.innerHTML = renderResetPassword(); return; }
   if (currentPage === 'force_change_pw') { app.innerHTML = renderForceChangePassword(); return; }
   if (currentPage === 'verify_email') { app.innerHTML = renderVerifyEmail(); return; }
+  if (currentPage === 'about') { app.innerHTML = renderAbout(); return; }
 
   let nav = renderNav();
   let content = '';
@@ -374,6 +375,7 @@ function renderNav() {
       <a onclick="navigate('player_settings')" class="${currentPage==='player_settings'?'active':''}">Settings${invBadge}</a>
       ${org?`<a onclick="navigate('owner_settings')" class="${currentPage==='owner_settings'?'active':''}">Organizer</a>`:''}
       ${isSuperuser()?`<a onclick="navigate('admin')" class="${currentPage==='admin'?'active':''}" style="color:var(--orange);">Admin</a>`:''}
+      <a onclick="navigate('about')" class="${currentPage==='about'?'active':''}">About</a>
       <a onclick="doLogout()" style="color:var(--red)">Logout</a>
     </div>
     <button class="hamburger" onclick="toggleMobileMenu()">☰</button>
@@ -387,6 +389,7 @@ function renderNav() {
       <a onclick="navigate('player_settings');mobileMenuOpen=false;" class="${currentPage==='player_settings'?'active':''}">⚙ Settings${invBadge}</a>
       ${org?`<a onclick="navigate('owner_settings');mobileMenuOpen=false;" class="${currentPage==='owner_settings'?'active':''}">🔧 Organizer</a>`:''}
       ${isSuperuser()?`<a onclick="navigate('admin');mobileMenuOpen=false;" class="${currentPage==='admin'?'active':''}" style="color:var(--orange);">👑 Admin</a>`:''}
+      <a onclick="navigate('about');mobileMenuOpen=false;" class="${currentPage==='about'?'active':''}">ℹ️ About</a>
       <a onclick="doLogout()" style="color:var(--red)">🚪 Logout</a>
     </div>
   </div>`;
@@ -409,6 +412,9 @@ function renderLogin() {
       <div style="margin-top:20px;display:flex;justify-content:center;gap:16px;font-size:13px;">
         <a style="color:var(--orange);cursor:pointer;" onclick="navigate('signup')">New player? Sign up</a>
         <a style="color:var(--text2);cursor:pointer;" onclick="doResetPassword()">Forgot password?</a>
+      </div>
+      <div style="margin-top:16px;text-align:center;">
+        <a style="color:var(--text2);cursor:pointer;font-size:12px;" onclick="navigate('about')">What is GOATcommish?</a>
       </div>
     </div>
   </div>`;
@@ -1893,6 +1899,118 @@ function adminEditGroup(id, name) {
   api('/admin/groups/'+id, {method:'PATCH', body: JSON.stringify({name: newName})})
     .then(() => { showToast('Group renamed','success'); fetchAdminData().then(()=>render()); })
     .catch(e => showToast(e.message,'error'));
+}
+
+// ═══ ABOUT PAGE ═════════════════════════════════════════════
+function renderAbout() {
+  const loggedIn = !!getToken();
+  const backBtn = loggedIn
+    ? `<button class="btn-secondary btn-sm" onclick="navigate('games')">← Back</button>`
+    : `<button class="btn-secondary btn-sm" onclick="navigate('login')">← Sign In</button>`;
+  return `<div style="min-height:100vh;padding:20px;">
+    <div class="fade-in" style="max-width:700px;margin:0 auto;">
+      <div style="text-align:center;margin-bottom:32px;">
+        <img src="/static/logo.png?v=3" style="width:160px;margin:0 auto 12px;display:block;">
+        ${backBtn}
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <p style="color:var(--text2);font-size:15px;line-height:1.7;">
+          Running a regular pickup game shouldn't require a part-time administrative job. GOATcommish handles the busywork so organizers can focus on playing — and players always know where, when, and whether they're in.
+        </p>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <h3 style="font-size:18px;font-weight:700;color:var(--orange);margin-bottom:12px;">🗂️ Stop Managing Spreadsheets</h3>
+        <p style="color:var(--text2);font-size:14px;line-height:1.7;">
+          Every organizer knows the pain: someone changes their email, another player moves away but keeps getting messages, a third asks to switch from email to text. Multiply that across 30+ players and you're spending more time on logistics than on the court.
+        </p>
+        <p style="color:var(--text2);font-size:14px;line-height:1.7;margin-top:12px;">
+          GOATcommish keeps a living roster. Players manage their own contact info, communication preferences, and group membership. When someone wants texts instead of emails, they change it themselves. When someone moves away, they tap "Leave Group." No more maintaining a spreadsheet that's out of date the moment you save it.
+        </p>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <h3 style="font-size:18px;font-weight:700;color:var(--orange);margin-bottom:12px;">📣 Smart Notifications</h3>
+        <p style="color:var(--text2);font-size:14px;line-height:1.7;">
+          Not every player should hear about a game at the same time. Your regulars — the ones who show up rain or shine — deserve first dibs. GOATcommish sends notifications in timed waves:
+        </p>
+        <div style="margin:16px 0;padding-left:16px;border-left:3px solid var(--orange);color:var(--text2);font-size:14px;line-height:2;">
+          <strong style="color:var(--green);">High priority</strong> — Notified immediately, can lock in their spot<br>
+          <strong>Standard priority</strong> — Notified after a configurable delay<br>
+          <strong style="color:var(--text2);">Low priority</strong> — Notified last, only if spots remain
+        </div>
+        <p style="color:var(--text2);font-size:14px;line-height:1.7;">
+          Every notification includes full game details — date, time, location — delivered via email, SMS, or both, based on each player's own preference.
+        </p>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <h3 style="font-size:18px;font-weight:700;color:var(--orange);margin-bottom:12px;">🎲 Fair Slot Allocation</h3>
+        <p style="color:var(--text2);font-size:14px;line-height:1.7;">
+          When you have 25 players who want to play but only 12 spots, how do you decide who's in? GOATcommish offers two approaches:
+        </p>
+        <div style="margin:16px 0;padding-left:16px;border-left:3px solid var(--orange);color:var(--text2);font-size:14px;line-height:2;">
+          <strong>First Come, First Served</strong> — Spots fill in signup order. Fast fingers win.<br>
+          <strong>Random Selection</strong> — Everyone signs up during a window, then the system randomly selects who's in. No advantage to being glued to your phone.
+        </div>
+        <p style="color:var(--text2);font-size:14px;line-height:1.7;">
+          Both algorithms support a configurable player cap and an automatic waitlist. When someone drops out, the next player is promoted and notified instantly.
+        </p>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <h3 style="font-size:18px;font-weight:700;color:var(--orange);margin-bottom:12px;">👥 Multiple Groups, One Platform</h3>
+        <p style="color:var(--text2);font-size:14px;line-height:1.7;">
+          Run a Tuesday night game and a Saturday morning game with completely different rosters? GOATcommish supports multiple independent groups, each with their own players, settings, locations, and notification schedules. Players can belong to multiple groups, and organizers can manage them all from a single dashboard.
+        </p>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <h3 style="font-size:18px;font-weight:700;margin-bottom:16px;">For Players</h3>
+        <div style="color:var(--text2);font-size:14px;line-height:2;">
+          ✅ Update your name, email, phone, and notification preferences anytime<br>
+          ✅ Choose how you hear about games — email, SMS, both, or none<br>
+          ✅ One-tap signup — join a game or take yourself off with a single click<br>
+          ✅ See your waitlist position and get notified when a spot opens<br>
+          ✅ Play in as many groups as you want from one account<br>
+          ✅ Leave a group anytime without bothering the organizer
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <h3 style="font-size:18px;font-weight:700;margin-bottom:16px;">For Organizers</h3>
+        <div style="color:var(--text2);font-size:14px;line-height:2;">
+          ✅ Set date, time, location, player cap, and selection algorithm per game<br>
+          ✅ Assign high/standard/low priority per player, per group<br>
+          ✅ Configurable notification delays between priority tiers<br>
+          ✅ Drop or add players after the game is set, with optional notifications<br>
+          ✅ Review random selection results before players are notified<br>
+          ✅ Bulk add players via CSV import or invite from your other groups<br>
+          ✅ Get notified when players sign up or drop out<br>
+          ✅ Edit or cancel games — all signed-up players are notified automatically
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;padding:24px;">
+        <h3 style="font-size:18px;font-weight:700;margin-bottom:16px;">Platform</h3>
+        <div style="color:var(--text2);font-size:14px;line-height:2;">
+          📱 Mobile-first design — built for phones, works everywhere<br>
+          🔄 Real-time updates — player lists and game status update live<br>
+          📬 Multi-channel — email (SendGrid) and SMS (Twilio) support<br>
+          🔒 Privacy-first — full privacy policy, CCPA/GDPR/CTIA compliant<br>
+          ⏰ Background scheduler — all timed actions run automatically
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:24px;">
+        ${loggedIn
+          ? `<button class="btn-primary" style="padding:12px 32px;" onclick="navigate('games')">Back to Games</button>`
+          : `<button class="btn-primary" style="padding:12px 32px;" onclick="navigate('signup')">Sign Up Free</button>
+             <p style="margin-top:12px;"><a style="color:var(--text2);cursor:pointer;font-size:13px;" onclick="navigate('login')">Already have an account? Sign in</a></p>`}
+      </div>
+    </div>
+  </div>`;
 }
 
 // ═══ ALGORITHM INFO ══════════════════════════════════════════
