@@ -1558,11 +1558,63 @@ function renderAddPlayer() {
       <button class="btn-primary" onclick="invitePlayer()">Add / Invite Player</button>
     </div>
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;">Invite from Your Other Groups</h3>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Players from your other groups who aren't in this one yet.</p>
+      <div id="cross-group-list" style="font-size:13px;color:var(--text2);">Loading...</div>
+    </div>
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
       <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;">Import CSV</h3>
       <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Paste: name, email, mobile (one per line). Supports comma, tab, or semicolon-separated. New players auto-added; existing players get invitations.</p>
       <textarea id="csv-import" rows="4" placeholder="John Doe,john@email.com,555-0123"></textarea>
       <button class="btn-secondary" style="margin-top:8px;width:100%;" onclick="importCSV()">Import Players</button>
     </div></div>`;
+}
+
+async function loadCrossGroupPlayers() {
+  const gid = activeOrgGroupId();
+  const container = document.getElementById('cross-group-list');
+  if (!container) return;
+  try {
+    const players = await api(`/groups/${gid}/cross-group-players`);
+    if (!players.length) {
+      container.innerHTML = '<span style="color:var(--text2);font-size:13px;">No additional players found in your other groups.</span>';
+      return;
+    }
+    container.innerHTML = `<div id="xg-search-wrap" style="margin-bottom:8px;">
+      <input id="xg-search" type="text" placeholder="Search by name..." style="width:100%;padding:6px 10px;font-size:13px;" oninput="filterCrossGroup()">
+    </div>` + players.map(p =>
+      `<div class="xg-row" data-name="${esc(p.name).toLowerCase()}" style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">
+        <div>
+          <strong>${esc(p.name)}</strong>
+          <span style="font-size:11px;color:var(--text2);margin-left:6px;">${esc(p.source_groups)}</span>
+        </div>
+        <button class="btn-secondary btn-sm" onclick="inviteCrossGroup(${p.id},this)" style="font-size:11px;white-space:nowrap;">Invite</button>
+      </div>`
+    ).join('');
+  } catch(e) {
+    container.innerHTML = '<span style="color:var(--text2);font-size:13px;">Could not load players.</span>';
+  }
+}
+
+function filterCrossGroup() {
+  const q = (document.getElementById('xg-search')?.value || '').toLowerCase();
+  document.querySelectorAll('.xg-row').forEach(row => {
+    row.style.display = row.dataset.name.includes(q) ? 'flex' : 'none';
+  });
+}
+
+async function inviteCrossGroup(targetId, btn) {
+  const gid = activeOrgGroupId();
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    const r = await api(`/groups/${gid}/invite-existing/${targetId}`, {method:'POST'});
+    showToast(r.message, 'success');
+    btn.textContent = '✓ Sent'; btn.style.color = 'var(--green)';
+    await fetchPlayers(); render();
+  } catch(e) {
+    showToast(e.message, 'error');
+    btn.disabled = false; btn.textContent = 'Invite';
+  }
 }
 
 async function setMemberPriority(pid, priority) {
@@ -1594,7 +1646,6 @@ async function invitePlayer() {
   if(!name||!email) { showToast('Name and email required','error'); return; }
   try {
     const r = await api(`/groups/${gid}/invite`,{method:'POST',body:JSON.stringify({name,email,mobile})});
-    showToast(r.message,'success');
     showToast(r.message,'success');
     await fetchPlayers(); render();
   } catch(e) { showToast(e.message,'error'); }
@@ -1946,6 +1997,7 @@ function closeMobileMenu(e) { if(e.target.classList.contains('mobile-menu')){ mo
 function bindEvents() {
   const dt = document.getElementById('cg-delay-notif');
   if(dt) { const f=document.getElementById('cg-delay-fields'); if(f) f.style.display=dt.checked?'grid':'none'; dt.onchange=()=>{ f.style.display=dt.checked?'grid':'none'; }; }
+  if (document.getElementById('cross-group-list')) loadCrossGroupPlayers();
   updateCountdowns();
 }
 

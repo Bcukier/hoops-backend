@@ -1012,6 +1012,98 @@ async def invite_to_group(group_id: int, req: PlayerCreate, player_id: int = Dep
         await db.close()
 
 
+@app.get("/api/groups/{group_id}/cross-group-players")
+async def cross_group_players(group_id: int, player_id: int = Depends(get_current_player_id)):
+    """Get players from other groups the organizer belongs to, excluding those already in this group."""
+    db = await get_db()
+    try:
+        await require_group_organizer(db, player_id, group_id)
+        # Get all groups the organizer is a member of (any role, active status)
+        cursor = await db.execute(
+            "SELECT group_id FROM group_members WHERE player_id=? AND status='active'",
+            (player_id,))
+        my_gids = [r["group_id"] for r in await cursor.fetchall()]
+        other_gids = [g for g in my_gids if g != group_id]
+        if not other_gids:
+            return []
+
+        # Get players already in target group (any status except removed)
+        cursor = await db.execute(
+            "SELECT player_id FROM group_members WHERE group_id=?", (group_id,))
+        existing_pids = {r["player_id"] for r in await cursor.fetchall()}
+
+        # Get players from other groups, excluding those already in target group
+        placeholders = ",".join("?" * len(other_gids))
+        cursor = await db.execute(
+            f"""SELECT DISTINCT p.id, p.name, p.email,
+                       GROUP_CONCAT(DISTINCT g.name) as source_groups
+                FROM group_members gm
+                JOIN players p ON p.id = gm.player_id
+                JOIN groups g ON g.id = gm.group_id
+                WHERE gm.group_id IN ({placeholders})
+                  AND gm.status = 'active'
+                  AND p.status = 'approved'
+                  AND gm.player_id NOT IN (SELECT player_id FROM group_members WHERE group_id=?)
+                GROUP BY p.id
+                ORDER BY p.name""",
+            other_gids + [group_id])
+        players = [{"id": r["id"], "name": r["name"], "email": r["email"],
+                     "source_groups": r["source_groups"]} for r in await cursor.fetchall()]
+        return players
+    finally:
+        await db.close()
+
+
+@app.post("/api/groups/{group_id}/invite-existing/{target_id}")
+async def invite_existing_player(group_id: int, target_id: int,
+                                  player_id: int = Depends(get_current_player_id)):
+    """Invite an existing player (from another group) to this group."""
+    db = await get_db()
+    try:
+        await require_group_organizer(db, player_id, group_id)
+        # Verify the organizer shares a group with the target
+        cursor = await db.execute(
+            """SELECT 1 FROM group_members gm1
+               JOIN group_members gm2 ON gm1.group_id = gm2.group_id
+               WHERE gm1.player_id=? AND gm2.player_id=? AND gm1.status='active' AND gm2.status='active'
+               LIMIT 1""",
+            (player_id, target_id))
+        if not await cursor.fetchone():
+            raise HTTPException(403, "You don't share a group with this player")
+
+        # Check if already in the target group
+        cursor = await db.execute(
+            "SELECT status FROM group_members WHERE group_id=? AND player_id=?", (group_id, target_id))
+        mem = await cursor.fetchone()
+        if mem and mem["status"] == "active":
+            return {"message": "Already an active member"}
+        if mem and mem["status"] == "removed_self":
+            raise HTTPException(400, "This player removed themselves from the group. They must rejoin on their own.")
+
+        # Get target player name
+        cursor = await db.execute("SELECT name FROM players WHERE id=?", (target_id,))
+        prow = await cursor.fetchone()
+        if not prow: raise HTTPException(404, "Player not found")
+        target_name = prow["name"]
+
+        token = secrets.token_urlsafe(32)
+        if mem:
+            await db.execute("UPDATE group_members SET status='invited' WHERE group_id=? AND player_id=?",
+                             (group_id, target_id))
+        else:
+            await db.execute(
+                "INSERT INTO group_members (group_id,player_id,role,priority,status) VALUES (?,?,'player','standard','invited')",
+                (group_id, target_id))
+        await db.execute(
+            "INSERT INTO group_invitations (group_id,player_id,invited_by,token) VALUES (?,?,?,?)",
+            (group_id, target_id, player_id, token))
+        await db.commit()
+        bg_notify(notify_group_invitation, group_id, target_id, player_id, token)
+        return {"message": f"Invitation sent to {target_name}"}
+    finally:
+        await db.close()
+
+
 @app.post("/api/invitations/{token}/accept")
 async def accept_invitation(token: str, player_id: int = Depends(get_current_player_id)):
     db = await get_db()
