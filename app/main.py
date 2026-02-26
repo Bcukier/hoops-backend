@@ -1830,11 +1830,13 @@ async def drop_from_game(game_id: int, player_id: int = Depends(get_current_play
         was_in = signup["status"] == "in"
         await db.execute("DELETE FROM game_signups WHERE game_id=? AND player_id=?", (game_id, player_id))
         await db.commit()
-        # Promote from waitlist if FCFS, notify organizers of drop
+        # Promote from waitlist if an 'in' player dropped, notify organizers
         if was_in:
             cursor2 = await db.execute("SELECT * FROM games WHERE id=?", (game_id,))
             g = await cursor2.fetchone()
-            if g and g["algorithm"] == "first_come" and g["selection_done"]:
+            # Promote top waitlisted player for any algorithm post-selection,
+            # or FCFS games (which are always "live")
+            if g and (g["selection_done"] or g["algorithm"] == "first_come"):
                 cursor3 = await db.execute(
                     """SELECT id, player_id FROM game_signups
                        WHERE game_id=? AND status='waitlist'
