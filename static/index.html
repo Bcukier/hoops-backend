@@ -2073,6 +2073,17 @@ function renderAlgorithmInfo() {
       </p>
 
       <div class="card" style="margin-top:12px;background:var(--bg);padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">How the notification cascade works:</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.8;">
+          1. <strong>Organizer-added</strong> players at game creation are always in<br>
+          2. <strong style="color:var(--green);">High priority</strong> players are notified first. If auto-add is on, they are automatically signed up and guaranteed a spot.<br>
+          3. After a delay, <strong style="color:var(--blue);">Standard priority</strong> players are notified<br>
+          4. After another delay, <strong style="color:var(--grey);">Low priority</strong> players are notified<br>
+          5. All players sign up during the waiting period
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px;background:var(--bg);padding:14px;">
         <div style="font-size:13px;font-weight:600;margin-bottom:8px;">High priority — two modes:</div>
         <div style="font-size:13px;color:var(--text2);line-height:1.8;">
           <strong style="color:var(--green);">Auto-add (default):</strong> High priority players are automatically signed up and guaranteed a spot in the game. They don't need to take any action — they're in unless they choose to drop.<br><br>
@@ -2081,7 +2092,7 @@ function renderAlgorithmInfo() {
       </div>
 
       <div class="card" style="margin-top:12px;background:var(--bg);padding:14px;">
-        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Selection order:</div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Selection order (after waiting period ends):</div>
         <div style="font-size:13px;color:var(--text2);line-height:1.8;">
           1. <strong>Organizer-added</strong> players are always in (guaranteed)<br>
           2. If auto-add is on: <strong style="color:var(--green);">High priority</strong> players get guaranteed spots<br>
