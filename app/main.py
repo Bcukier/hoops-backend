@@ -1797,7 +1797,13 @@ async def signup_for_game(game_id: int, player_id: int = Depends(get_current_pla
         cursor = await db.execute(
             "SELECT id FROM game_signups WHERE game_id=? AND player_id=?", (game_id, player_id))
         if await cursor.fetchone(): raise HTTPException(400, "Already signed up")
-        if g["algorithm"] == "first_come" and g["selection_done"]:
+        if g["algorithm"] == "first_come":
+            cap = g["cap"] if g["cap_enabled"] else 999999
+            cursor2 = await db.execute(
+                "SELECT COUNT(*) as c FROM game_signups WHERE game_id=? AND status='in'", (game_id,))
+            in_count = (await cursor2.fetchone())["c"]
+            signup_status = "in" if in_count < cap else "waitlist"
+        elif g["algorithm"] == "random" and g["selection_done"]:
             cap = g["cap"] if g["cap_enabled"] else 999999
             cursor2 = await db.execute(
                 "SELECT COUNT(*) as c FROM game_signups WHERE game_id=? AND status='in'", (game_id,))
