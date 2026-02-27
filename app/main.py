@@ -2267,6 +2267,14 @@ async def admin_scheduler_jobs(player_id: int = Depends(get_current_player_id)):
 static_dir = Path(__file__).parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+@app.get("/favicon.ico")
+async def favicon_ico():
+    return FileResponse(str(static_dir / "favicon.ico"), media_type="image/x-icon")
+
+@app.get("/favicon.png")
+async def favicon_png():
+    return FileResponse(str(static_dir / "favicon.png"), media_type="image/png")
+
 @app.get("/privacy")
 async def privacy_page():
     return FileResponse(str(static_dir / "privacy.html"))
