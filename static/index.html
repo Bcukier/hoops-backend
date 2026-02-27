@@ -2078,8 +2078,9 @@ function renderAlgorithmInfo() {
           1. <strong>Organizer-added</strong> players at game creation are always in<br>
           2. <strong style="color:var(--green);">High priority</strong> players are notified first. If auto-add is on, they are automatically signed up and guaranteed a spot.<br>
           3. After a delay, <strong style="color:var(--blue);">Standard priority</strong> players are notified<br>
-          4. After another delay, <strong style="color:var(--grey);">Low priority</strong> players are notified<br>
-          5. All players sign up during the waiting period
+          4. Players are selected after delay (default 1 hour)<br>
+          5. After another delay, if there are still open slots, <strong style="color:var(--grey);">Low priority</strong> players are notified<br>
+          6. If players sign up after the selection period, they are automatically added to the game if slots are open, or the waitlist if slots are full
         </div>
       </div>
 
