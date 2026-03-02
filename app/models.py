@@ -116,7 +116,7 @@ class GameCreate(BaseModel):
     cap_enabled: bool = True
     owner_added_player_ids: list[int] = []
     notify_future_at: Optional[str] = None
-    random_high_auto: bool = True
+    random_high_auto: bool = False
 
 class BatchGameCreate(BaseModel):
     games: list[GameCreate] = Field(..., min_length=1, max_length=20)
@@ -148,7 +148,7 @@ class GameOut(BaseModel):
     notify_standard_status: Optional[str] = None
     notify_low_status: Optional[str] = None
     batch_id: Optional[str] = None
-    random_high_auto: bool = True
+    random_high_auto: bool = False
     signups: list["SignupOut"] = []
 
 class SignupOut(BaseModel):
