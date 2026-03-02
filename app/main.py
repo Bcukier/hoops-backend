@@ -1457,7 +1457,7 @@ async def game_to_out(db, g) -> GameOut:
         auto_selection_at=auto_sel, auto_publish_at=auto_pub,
         notify_standard_at=ns_at, notify_low_at=nl_at,
         notify_standard_status=ns_st, notify_low_status=nl_st,
-        batch_id=gd.get("batch_id"), random_high_auto=bool(gd.get("random_high_auto",1)),
+        batch_id=gd.get("batch_id"), random_high_auto=bool(gd.get("random_high_auto",0)),
         signups=signups)
 
 

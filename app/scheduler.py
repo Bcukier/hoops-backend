@@ -289,7 +289,7 @@ class Scheduler:
         if (
             priority == "high"
             and game.get("algorithm") == "random"
-            and game.get("random_high_auto", 1)
+            and game.get("random_high_auto", 0)
         ):
             for pid in players:
                 await db.execute(
@@ -444,7 +444,7 @@ async def schedule_game_notifications(game_id: int, notify_at: str | None):
             high_players = [r["id"] for r in await cursor2.fetchall()]
             if high_players:
                 # Auto-sign up high-priority if random_high_auto is on
-                if g["algorithm"] == "random" and g.get("random_high_auto", 1):
+                if g["algorithm"] == "random" and g.get("random_high_auto", 0):
                     for pid in high_players:
                         await db.execute(
                             """INSERT OR IGNORE INTO game_signups

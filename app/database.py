@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS games (
     pending_review INTEGER DEFAULT 0,
     closed INTEGER DEFAULT 0,
     batch_id TEXT,
-    random_high_auto INTEGER DEFAULT 1,
+    random_high_auto INTEGER DEFAULT 0,
     FOREIGN KEY (created_by) REFERENCES players(id)
 );
 
@@ -212,7 +212,7 @@ async def _run_migrations(db):
         ("players", "unsubscribe_token", "TEXT"),
         ("players", "email_bounced", "INTEGER DEFAULT 0"),
         ("games", "group_id", "INTEGER NOT NULL DEFAULT 0"),
-        ("games", "random_high_auto", "INTEGER DEFAULT 1"),
+        ("games", "random_high_auto", "INTEGER DEFAULT 0"),
         ("games", "batch_id", "TEXT"),
         ("games", "pending_review", "INTEGER DEFAULT 0"),
         ("locations", "group_id", "INTEGER NOT NULL DEFAULT 0"),

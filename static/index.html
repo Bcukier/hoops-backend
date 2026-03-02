@@ -1102,7 +1102,7 @@ function renderCreateGame() {
         <option value="random" ${defAlg==='random'?'selected':''}>Random Selection</option></select></div>
       <div id="cg-random-opts" style="display:${defAlg==='random'?'block':'none'};padding:8px 14px;background:var(--surface2);border-radius:8px;">
         <div style="display:flex;align-items:center;gap:12px;">
-          <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="cg-high-auto" checked><span class="slider"></span></label>
+          <label class="toggle" style="margin-bottom:0;"><input type="checkbox" id="cg-high-auto"><span class="slider"></span></label>
           <div><span style="font-size:14px;">Auto-add high priority players</span>
             <div style="font-size:11px;color:var(--text2);margin-top:2px;">When on, high priority players are automatically signed up and guaranteed a spot. When off, they're just notified first.</div></div>
         </div>
@@ -1187,7 +1187,7 @@ async function createGame(skipLast = false) {
   const capEnabled = document.getElementById('cg-cap-on').checked;
   const cap = parseInt(document.getElementById('cg-cap').value)||12;
   const highAutoEl = document.getElementById('cg-high-auto');
-  const randomHighAuto = highAutoEl ? highAutoEl.checked : true;
+  const randomHighAuto = highAutoEl ? highAutoEl.checked : false;
   const ownerAdded = [...document.querySelectorAll('.owner-add-player:checked')].map(cb=>parseInt(cb.value)).filter(n=>!isNaN(n));
   const groupEl = document.getElementById('cg-group');
   const groupId = groupEl ? parseInt(groupEl.value) : activeOrgGroupId();
