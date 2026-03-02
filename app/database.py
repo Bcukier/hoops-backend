@@ -281,6 +281,27 @@ async def _run_migrations(db):
         await db.execute("CREATE INDEX IF NOT EXISTS idx_scheduler_pending ON scheduler_jobs(status, scheduled_at)")
         await db.commit()
 
+    # Migrate game_signups to enforce UNIQUE(game_id, player_id) if missing
+    cursor = await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='game_signups'")
+    row = await cursor.fetchone()
+    if row and 'UNIQUE' not in (row["sql"] or "").upper():
+        # Remove duplicates first (keep earliest signup per game+player)
+        await db.execute("""DELETE FROM game_signups WHERE id NOT IN (
+            SELECT MIN(id) FROM game_signups GROUP BY game_id, player_id)""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS game_signups_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            signed_up_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('in','waitlist','pending')),
+            owner_added INTEGER DEFAULT 0,
+            UNIQUE(game_id, player_id))""")
+        await db.execute("INSERT OR IGNORE INTO game_signups_new SELECT * FROM game_signups")
+        await db.execute("DROP TABLE game_signups")
+        await db.execute("ALTER TABLE game_signups_new RENAME TO game_signups")
+        await db.commit()
+        logger.info("✅ Migrated game_signups: removed duplicates and added UNIQUE constraint")
+
     # Check if groups exist already
     cursor = await db.execute("SELECT COUNT(*) as c FROM groups")
     if (await cursor.fetchone())["c"] > 0:
