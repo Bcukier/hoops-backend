@@ -118,6 +118,15 @@ CREATE TABLE IF NOT EXISTS game_signups (
     UNIQUE(game_id, player_id)
 );
 
+CREATE TABLE IF NOT EXISTS push_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'ios' CHECK(platform IN ('ios','android')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(player_id, token)
+);
+
 CREATE TABLE IF NOT EXISTS game_notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,

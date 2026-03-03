@@ -262,6 +262,14 @@ async def send_notification(
             else:
                 logger.warning(f"Player {player_id} has no mobile number")
 
+    # Always attempt push notification if player has registered tokens
+    try:
+        from app.push import send_push_to_player
+        push_delivered = await send_push_to_player(db, player_id, subject, body)
+        any_delivered = any_delivered or push_delivered
+    except Exception as e:
+        logger.debug(f"Push notification skipped: {e}")
+
     if not any_delivered:
         logger.info(f"📋 Notification logged (not delivered) — player {player_id}: {subject}")
 

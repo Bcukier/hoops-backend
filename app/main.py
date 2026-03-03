@@ -438,6 +438,37 @@ async def change_password(req: dict, player_id: int = Depends(get_current_player
         await db.close()
 
 
+# ── Push Notification Tokens ────────────────────────────
+
+class PushTokenRequest(BaseModel):
+    token: str = Field(..., min_length=1, max_length=500)
+    platform: str = "ios"
+
+@app.post("/api/push-token")
+async def register_push_token(req: PushTokenRequest, player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO push_tokens (player_id, token, platform) VALUES (?,?,?)",
+            (player_id, req.token, req.platform))
+        await db.commit()
+        return {"message": "Push token registered"}
+    finally:
+        await db.close()
+
+@app.delete("/api/push-token")
+async def unregister_push_token(token: str = Query(...), player_id: int = Depends(get_current_player_id)):
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM push_tokens WHERE player_id=? AND token=?",
+            (player_id, token))
+        await db.commit()
+        return {"message": "Push token removed"}
+    finally:
+        await db.close()
+
+
 @app.post("/api/auth/reset-password")
 async def request_password_reset(email: str = Query(...)):
     """Send a password reset link to the user's email."""
