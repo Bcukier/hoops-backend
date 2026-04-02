@@ -720,7 +720,7 @@ function renderGameColumn(game) {
   let playerList = '';
   const isGameOrganizer = isOrganizer() && ownerViewMode && orgGroups().some(g => g.group_id === game.group_id);
   const showGuaranteed = isGameOrganizer;
-  const canManage = isGameOrganizer && !started && !game.closed && game.selection_done;
+  const canManage = isGameOrganizer && !started && !game.closed && (game.selection_done || game.algorithm==='first_come');
   if (game.selection_done || game.algorithm==='first_come') {
     inGame.forEach((s,i)=> {
       const guar = showGuaranteed && s.owner_added ? ' style="color:#4ade80;"' : '';

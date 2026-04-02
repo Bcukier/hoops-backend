@@ -1769,7 +1769,7 @@ async def organizer_drop_player(game_id: int, target_id: int,
 
         promoted_player_id = None
         # Auto-promote from waitlist if the dropped player was 'in'
-        if was_in and g["selection_done"]:
+        if was_in and (g["selection_done"] or g["algorithm"] == "first_come"):
             cursor2 = await db.execute(
                 """SELECT id, player_id FROM game_signups
                    WHERE game_id=? AND status='waitlist'
@@ -1925,7 +1925,7 @@ async def add_player_to_game(game_id: int, target_id: int,
         await db.commit()
 
         # Notify added player if requested and game is post-selection
-        if notify and g["selection_done"] and signup_status == "in":
+        if notify and (g["selection_done"] or g["algorithm"] == "first_come") and signup_status == "in":
             from app.notifications import send_notification, _format_game_date
             nice_date, weekday, time_str = _format_game_date(g["date"])
             cursor3 = await db.execute("SELECT notif_pref FROM players WHERE id=?", (target_id,))
